@@ -105,11 +105,14 @@ MCP 客户端通常配置有工具调用超时时间（如 `timeout: 600` 即 10
 ```
 
 2. 在 AI 助手的自定义规则中添加以下内容（Cursor Settings > Rules > User Rules）：
-
-> If requirements or instructions are unclear use the tool interactive_feedback to ask clarifying questions to the user before proceeding, do not make assumptions. Whenever possible, present the user with predefined options through the interactive_feedback MCP tool to facilitate quick decisions.
-
-> Whenever you're about to complete a user request, call the interactive_feedback tool to request user feedback before ending the process. If the feedback is empty you can end the request and don't call the tool in loop.
-
+- 英文版：
+> If a request or instruction is unclear, use the interactive_feedback tool to ask the user clarifying questions before proceeding. Do not make assumptions.
+Provide predefined options to the user via the interactive_feedback MCP tool whenever possible to facilitate quick decision-making.
+Each time you are about to complete a user request, call the interactive_feedback tool to ask for user feedback before finalizing the process. If the feedback is empty, you may end the request and must not call the tool in a loop. If the tool call fails, use the built-in AskQuestion tool.
+- 中文版
+> 如果要求或指令不明确，在继续操作之前使用interactive_feedback工具向用户询问澄清问题，不要做出假设。
+尽可能通过interactive_feedback MCP工具向用户提供预定义的选项，以促进快速决策。
+每当即将完成用户请求时，调用interactive_feedback工具在结束流程前请求用户反馈。如果反馈为空，则可以结束请求，并且不要循环调用该工具，如果该工具调用失败时，使用内置 `AskQuestion` 工具。
 这将确保 AI 助手在提示不明确时以及在将任务标记为完成之前，始终使用此 MCP 服务器请求用户反馈。
 
 ## 📸 截图功能使用说明
