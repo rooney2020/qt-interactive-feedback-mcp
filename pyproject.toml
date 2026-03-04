@@ -1,6 +1,6 @@
 [project]
 name = "interactive-feedback-with-capture"
-version = "0.2.3"
+version = "0.2.4"
 description = "MCP server for interactive user feedback with screenshot capture in AI-assisted development tools."
 readme = "README.md"
 requires-python = ">=3.11"

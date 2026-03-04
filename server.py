@@ -16,12 +16,16 @@ from pydantic import Field
 
 mcp = FastMCP("Interactive Feedback MCP")
 
-HEARTBEAT_INTERVAL = 15
+HEARTBEAT_INTERVAL = 30
+MAX_HEARTBEAT_FAILURES = 3
+_active_windows: set[int] = set()
+
 
 async def launch_feedback_ui(
     summary: str,
     predefined_options: list[str] | None = None,
     ctx: Context | None = None,
+    window_id: int = 1,
 ) -> dict:
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         output_file = tmp.name
@@ -36,7 +40,8 @@ async def launch_feedback_ui(
             feedback_ui_path,
             "--prompt", summary,
             "--output-file", output_file,
-            "--predefined-options", "|||".join(predefined_options) if predefined_options else ""
+            "--predefined-options", "|||".join(predefined_options) if predefined_options else "",
+            "--window-id", str(window_id),
         ]
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -48,6 +53,7 @@ async def launch_feedback_ui(
         try:
             wait_task = asyncio.ensure_future(process.wait())
             elapsed = 0
+            heartbeat_failures = 0
             while not wait_task.done():
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
                 if not wait_task.done() and ctx:
@@ -58,8 +64,17 @@ async def launch_feedback_ui(
                             total=elapsed + 600,
                         )
                         await ctx.info(f"Waiting for user feedback... ({elapsed}s)")
+                        heartbeat_failures = 0
                     except Exception:
-                        pass
+                        heartbeat_failures += 1
+                        if heartbeat_failures >= MAX_HEARTBEAT_FAILURES:
+                            if process.returncode is None:
+                                process.terminate()
+                                try:
+                                    await asyncio.wait_for(process.wait(), timeout=5)
+                                except asyncio.TimeoutError:
+                                    process.kill()
+                            break
             await wait_task
         except (asyncio.CancelledError, Exception):
             if process.returncode is None:
@@ -87,6 +102,7 @@ async def launch_feedback_ui(
             os.unlink(output_file)
         raise e
 
+
 @mcp.tool()
 async def interactive_feedback(
     message: str = Field(description="The specific question for the user"),
@@ -94,8 +110,31 @@ async def interactive_feedback(
     ctx: Context = None,
 ):
     """Request interactive feedback from the user. Supports text and screenshot responses."""
+    window_id = 1
+    while window_id in _active_windows:
+        window_id += 1
+    _active_windows.add(window_id)
+
     predefined_options_list = predefined_options if isinstance(predefined_options, list) else None
-    result = await launch_feedback_ui(message, predefined_options_list, ctx)
+    max_attempts = 2
+    last_error = None
+    for attempt in range(max_attempts):
+        try:
+            result = await launch_feedback_ui(message, predefined_options_list, ctx, window_id=window_id)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < max_attempts - 1:
+                continue
+            _active_windows.discard(window_id)
+            return {
+                "interactive_feedback": (
+                    f"[Feedback UI failed after {max_attempts} attempts: {last_error}. "
+                    "Please use AskQuestion tool as fallback.]"
+                )
+            }
+
+    _active_windows.discard(window_id)
 
     text = result.get("interactive_feedback", "")
     images_b64 = result.get("images", [])
@@ -103,7 +142,6 @@ async def interactive_feedback(
     if not images_b64:
         return {"interactive_feedback": text}
 
-    # Decode all images once, reuse the bytes for both file saving and Image content
     decoded_images: list[bytes] = [base64.b64decode(img) for img in images_b64]
 
     run_id = uuid.uuid4().hex[:8]

@@ -100,14 +100,17 @@ class ScreenshotThumbnail(QWidget):
         self.setFixedWidth(166)
 
 class FeedbackUI(QMainWindow):
-    def __init__(self, prompt: str, predefined_options: list[str] | None = None):
+    def __init__(self, prompt: str, predefined_options: list[str] | None = None, window_id: str = "0"):
         super().__init__()
         self.prompt = prompt
         self.predefined_options = predefined_options or []
         self.feedback_result = None
         self.screenshots: list[QPixmap] = []
 
-        self.setWindowTitle("Interactive Feedback MCP")
+        title = "Interactive Feedback MCP"
+        if window_id and window_id != "0":
+            title += f" #{window_id}"
+        self.setWindowTitle(title)
         script_dir = os.path.dirname(os.path.abspath(__file__))
         icon_path = os.path.join(script_dir, "images", "feedback.png")
         if os.path.exists(icon_path):
@@ -138,7 +141,7 @@ class FeedbackUI(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        self.feedback_group = QGroupBox("Feedback")
+        self.feedback_group = QGroupBox()
         feedback_layout = QVBoxLayout(self.feedback_group)
 
         prompt_header = QHBoxLayout()
@@ -370,11 +373,11 @@ class FeedbackUI(QMainWindow):
 
         return self.feedback_result
 
-def feedback_ui(prompt: str, predefined_options: list[str] | None = None, output_file: str | None = None) -> FeedbackResult | None:
+def feedback_ui(prompt: str, predefined_options: list[str] | None = None, output_file: str | None = None, window_id: str = "0") -> FeedbackResult | None:
     app = QApplication.instance() or QApplication()
     app.setPalette(get_dark_mode_palette(app))
     app.setStyle("Fusion")
-    ui = FeedbackUI(prompt, predefined_options)
+    ui = FeedbackUI(prompt, predefined_options, window_id=window_id)
     result = ui.run()
 
     if output_file and result:
@@ -390,11 +393,12 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", default="I implemented the changes you requested.", help="The prompt to show to the user")
     parser.add_argument("--predefined-options", default="", help="Pipe-separated list of predefined options (|||)")
     parser.add_argument("--output-file", help="Path to save the feedback result as JSON")
+    parser.add_argument("--window-id", default="0", help="Window identifier for multi-agent scenarios")
     args = parser.parse_args()
 
     predefined_options = [opt for opt in args.predefined_options.split("|||") if opt] if args.predefined_options else None
 
-    result = feedback_ui(args.prompt, predefined_options, args.output_file)
+    result = feedback_ui(args.prompt, predefined_options, args.output_file, window_id=args.window_id)
     if result:
         print(f"\nFeedback received:\n{result['interactive_feedback']}")
         if result.get('images'):
