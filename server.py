@@ -9,6 +9,7 @@ import base64
 import tempfile
 import asyncio
 import uuid
+import fcntl
 
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
@@ -16,9 +17,37 @@ from pydantic import Field
 
 mcp = FastMCP("Interactive Feedback MCP")
 
-HEARTBEAT_INTERVAL = 30
+POLL_INTERVAL = 0.5
+HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
-_active_windows: set[int] = set()
+_LOCK_DIR = os.path.join(tempfile.gettempdir(), "mcp_feedback_windows")
+
+
+def _acquire_window_id() -> tuple[int, object]:
+    """Acquire a globally unique window ID using file locks across processes."""
+    os.makedirs(_LOCK_DIR, exist_ok=True)
+    window_id = 1
+    while True:
+        lock_path = os.path.join(_LOCK_DIR, f"window_{window_id}.lock")
+        fd = open(lock_path, "w")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fd.write(str(os.getpid()))
+            fd.flush()
+            return window_id, fd
+        except (IOError, OSError):
+            fd.close()
+            window_id += 1
+
+
+def _release_window_id(fd):
+    """Release a window ID lock by closing the file descriptor."""
+    try:
+        lock_path = fd.name
+        fd.close()
+        os.unlink(lock_path)
+    except (OSError, AttributeError):
+        pass
 
 
 async def launch_feedback_ui(
@@ -43,25 +72,32 @@ async def launch_feedback_ui(
             "--predefined-options", "|||".join(predefined_options) if predefined_options else "",
             "--window-id", str(window_id),
         ]
+        env = os.environ.copy()
+        if sys.platform == "linux":
+            env.setdefault("QT_IM_MODULE", "fcitx")
+            env.setdefault("XMODIFIERS", "@im=fcitx")
         process = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
+            env=env,
         )
 
         try:
             wait_task = asyncio.ensure_future(process.wait())
-            elapsed = 0
+            elapsed = 0.0
+            last_heartbeat = 0.0
             heartbeat_failures = 0
             while not wait_task.done():
-                await asyncio.sleep(HEARTBEAT_INTERVAL)
-                if not wait_task.done() and ctx:
-                    elapsed += HEARTBEAT_INTERVAL
+                await asyncio.sleep(POLL_INTERVAL)
+                elapsed += POLL_INTERVAL
+                if not wait_task.done() and ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
+                    last_heartbeat = elapsed
                     try:
                         await ctx.report_progress(
                             progress=elapsed,
-                            total=elapsed + 600,
+                            total=elapsed + 43200,
                         )
                         await ctx.info(f"Waiting for user feedback... ({elapsed}s)")
                         heartbeat_failures = 0
@@ -110,10 +146,7 @@ async def interactive_feedback(
     ctx: Context = None,
 ):
     """Request interactive feedback from the user. Supports text and screenshot responses."""
-    window_id = 1
-    while window_id in _active_windows:
-        window_id += 1
-    _active_windows.add(window_id)
+    window_id, lock_fd = _acquire_window_id()
 
     predefined_options_list = predefined_options if isinstance(predefined_options, list) else None
     max_attempts = 2
@@ -126,7 +159,7 @@ async def interactive_feedback(
             last_error = e
             if attempt < max_attempts - 1:
                 continue
-            _active_windows.discard(window_id)
+            _release_window_id(lock_fd)
             return {
                 "interactive_feedback": (
                     f"[Feedback UI failed after {max_attempts} attempts: {last_error}. "
@@ -134,7 +167,7 @@ async def interactive_feedback(
                 )
             }
 
-    _active_windows.discard(window_id)
+    _release_window_id(lock_fd)
 
     text = result.get("interactive_feedback", "")
     images_b64 = result.get("images", [])

@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "fastmcp>=3.0.0",
-    "pyside6>=6.8.2.1",
+    "pyside6==6.4.3",
 ]
 
 [project.urls]
