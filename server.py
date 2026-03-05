@@ -9,7 +9,11 @@ import base64
 import tempfile
 import asyncio
 import uuid
-import fcntl
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
@@ -31,7 +35,10 @@ def _acquire_window_id() -> tuple[int, object]:
         lock_path = os.path.join(_LOCK_DIR, f"window_{window_id}.lock")
         fd = open(lock_path, "w")
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if sys.platform == "win32":
+                msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fd.write(str(os.getpid()))
             fd.flush()
             return window_id, fd
@@ -44,6 +51,12 @@ def _release_window_id(fd):
     """Release a window ID lock by closing the file descriptor."""
     try:
         lock_path = fd.name
+        if sys.platform == "win32":
+            try:
+                fd.seek(0)
+                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except (IOError, OSError):
+                pass
         fd.close()
         os.unlink(lock_path)
     except (OSError, AttributeError):
