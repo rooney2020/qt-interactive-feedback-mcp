@@ -11,5 +11,5 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dragonstylecc/Interactive-Feedback-With-Capture-MCP"
-Repository = "https://github.com/dragonstylecc/Interactive-Feedback-With-Capture-MCP"
+Homepage = "https://github.com/rooney2020/qt-interactive-feedback-mcp"
+Repository = "https://github.com/rooney2020/qt-interactive-feedback-mcp"
