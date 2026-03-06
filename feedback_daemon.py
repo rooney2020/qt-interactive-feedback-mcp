@@ -112,7 +112,7 @@ class DaemonWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MCP \u53cd\u9988\u52a9\u624b")
-        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        # Normal window level, not always-on-top
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         icon_path = os.path.join(script_dir, "images", "feedback.png")
