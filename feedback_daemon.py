@@ -27,6 +27,19 @@ from feedback_ui import (
 
 SOCKET_PATH = os.path.join("/tmp", "mcp_feedback_daemon.sock")
 LOCK_PATH = os.path.join("/tmp", "mcp_feedback_daemon.lock")
+LOG_PATH = os.path.join("/tmp", "mcp_feedback_daemon.log")
+
+def _log(msg: str):
+    """Write log message to both stderr and log file."""
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    line = f"[{ts}] {msg}"
+    print(f"[daemon] {line}", file=sys.stderr)
+    try:
+        with open(LOG_PATH, "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 request_queue: queue.Queue = queue.Queue()
 close_queue: queue.Queue = queue.Queue()
@@ -69,7 +82,7 @@ def _handle_client(conn: socket.socket):
                 try:
                     peek = conn.recv(1, socket.MSG_PEEK)
                     if not peek:
-                        print(f"[daemon] Client disconnected for session {session_id}", file=sys.stderr)
+                        _log(f"Client disconnected for session {session_id}")
                         response_events.pop(session_id, None)
                         close_queue.put(session_id)
                         return
@@ -78,19 +91,23 @@ def _handle_client(conn: socket.socket):
                 finally:
                     conn.setblocking(True)
             except (socket.error, OSError):
-                print(f"[daemon] Socket error for session {session_id}", file=sys.stderr)
+                _log(f"Socket error for session {session_id}")
                 response_events.pop(session_id, None)
                 close_queue.put(session_id)
                 return
 
         response = response_dict.pop(session_id, {"interactive_feedback": "", "images": []})
+        resp_size = len(json.dumps(response, ensure_ascii=False).encode("utf-8"))
+        img_count = len(response.get("images", []))
+        _log(f"Sending response for {session_id}: {resp_size} bytes, {img_count} images")
         _send_json(conn, response)
+        _log(f"Response sent successfully for {session_id}")
     except ConnectionError:
         if session_id:
             response_events.pop(session_id, None)
             close_queue.put(session_id)
     except Exception as e:
-        print(f"[daemon] Error handling client: {e}", file=sys.stderr)
+        _log(f"Error handling client: {e}")
         if session_id:
             response_events.pop(session_id, None)
             close_queue.put(session_id)
@@ -170,6 +187,7 @@ class DaemonWindow(QMainWindow):
 
     def _add_tab(self, data: dict):
         session_id = data.get("session_id", "unknown")
+        _log(f"Adding new tab for session {session_id}")
         message = data.get("message", "")
         options = data.get("predefined_options") or None
         tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
@@ -202,12 +220,15 @@ class DaemonWindow(QMainWindow):
             if index >= 0:
                 self.tabs.removeTab(index)
             tab.deleteLater()
-            print(f"[daemon] Closed orphaned tab for session {session_id}", file=sys.stderr)
+            _log(f"Closed orphaned tab for session {session_id}")
 
         if self.tabs.count() == 0:
             self.hide()
 
     def _on_tab_submitted(self, session_id: str, result: dict):
+        img_count = len(result.get("images", []))
+        text_len = len(result.get("interactive_feedback", ""))
+        _log(f"Tab submitted for {session_id}: text={text_len} chars, images={img_count}")
         tab = self._session_tabs.pop(session_id, None)
         if tab:
             index = self.tabs.indexOf(tab)

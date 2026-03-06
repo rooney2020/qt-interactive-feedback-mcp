@@ -26,6 +26,18 @@ POLL_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
 
+_SERVER_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_server.log")
+
+def _slog(msg: str):
+    """Write log to server log file."""
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    try:
+        with open(_SERVER_LOG_PATH, "a") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
 _USE_DAEMON = sys.platform != "win32"
 SOCKET_PATH = os.path.join("/tmp", "mcp_feedback_daemon.sock")
 DAEMON_STARTUP_TIMEOUT = 10.0
@@ -130,7 +142,7 @@ async def _send_to_daemon(
         "predefined_options": predefined_options or [],
     }
 
-    reader, writer = await asyncio.open_unix_connection(SOCKET_PATH)
+    reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=16 * 1024 * 1024)
     writer.write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
     await writer.drain()
 
@@ -139,19 +151,26 @@ async def _send_to_daemon(
     heartbeat_failures = 0
 
     readline_task = asyncio.create_task(reader.readline())
+    _slog(f"[{session_id}] Waiting for daemon response...")
     try:
         while True:
             done, _ = await asyncio.wait([readline_task], timeout=POLL_INTERVAL)
             if done:
                 line = readline_task.result()
+                _slog(f"[{session_id}] Received response: {len(line)} bytes")
                 writer.close()
                 try:
                     await writer.wait_closed()
                 except Exception:
                     pass
                 if not line:
+                    _slog(f"[{session_id}] EOF received from daemon")
                     raise RuntimeError("Daemon connection lost (EOF)")
-                return json.loads(line.decode("utf-8").strip())
+                parsed = json.loads(line.decode("utf-8").strip())
+                img_count = len(parsed.get("images", []))
+                text_len = len(parsed.get("interactive_feedback", ""))
+                _slog(f"[{session_id}] Parsed: text={text_len}, images={img_count}")
+                return parsed
 
             elapsed += POLL_INTERVAL
             if ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
@@ -286,12 +305,15 @@ async def interactive_feedback(
             tab_title = f"\u4f1a\u8bdd #{os.getpid()}"
         for attempt in range(max_attempts):
             try:
+                _slog(f"Attempt {attempt+1}/{max_attempts} to send to daemon")
                 await _ensure_daemon_running()
                 result = await _send_to_daemon(
                     message, predefined_options_list, tab_title=tab_title, ctx=ctx
                 )
+                _slog(f"Success on attempt {attempt+1}")
                 break
             except Exception as e:
+                _slog(f"Attempt {attempt+1} failed: {e}")
                 last_error = e
                 if attempt < max_attempts - 1:
                     continue
