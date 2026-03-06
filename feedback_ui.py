@@ -355,18 +355,27 @@ class FeedbackContentWidget(QWidget):
         bottom_layout.addWidget(hint_label)
         bottom_layout.addStretch()
 
-        submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
-        submit_btn.setMinimumWidth(120)
-        submit_btn.setMinimumHeight(36)
-        submit_btn.setStyleSheet(
+        self.submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
+        self.submit_btn.setMinimumWidth(120)
+        self.submit_btn.setMinimumHeight(36)
+        self._submit_btn_style_enabled = (
             f"QPushButton {{ background: {BTN_SUBMIT_BG}; color: white; "
             f"border: none; border-radius: 6px; padding: 8px 24px; font-size: 14px; font-weight: bold; }}"
             f"QPushButton:hover {{ background: {BTN_SUBMIT_HOVER}; }}"
         )
-        submit_btn.clicked.connect(self._submit_feedback)
-        bottom_layout.addWidget(submit_btn)
+        self._submit_btn_style_disabled = (
+            f"QPushButton {{ background: #444466; color: #888888; "
+            f"border: none; border-radius: 6px; padding: 8px 24px; font-size: 14px; font-weight: bold; }}"
+        )
+        self.submit_btn.clicked.connect(self._submit_feedback)
+        bottom_layout.addWidget(self.submit_btn)
 
         main_layout.addLayout(bottom_layout)
+
+        self.feedback_text.textChanged.connect(self._update_submit_state)
+        for cb in self.option_checkboxes:
+            cb.toggled.connect(self._update_submit_state)
+        self._update_submit_state()
 
     def _on_image_pasted(self, image: QImage):
         pixmap = QPixmap.fromImage(image)
@@ -421,7 +430,22 @@ class FeedbackContentWidget(QWidget):
         buffer.close()
         return byte_array.toBase64().data().decode('ascii')
 
+    def _has_content(self) -> bool:
+        if self.feedback_text.toPlainText().strip():
+            return True
+        return any(cb.isChecked() for cb in self.option_checkboxes)
+
+    def _update_submit_state(self):
+        enabled = self._has_content()
+        self.submit_btn.setEnabled(enabled)
+        self.submit_btn.setStyleSheet(
+            self._submit_btn_style_enabled if enabled else self._submit_btn_style_disabled
+        )
+
     def _submit_feedback(self):
+        if not self._has_content():
+            return
+
         feedback_text = self.feedback_text.toPlainText().strip()
         selected_options = []
 
@@ -429,11 +453,6 @@ class FeedbackContentWidget(QWidget):
             for i, checkbox in enumerate(self.option_checkboxes):
                 if checkbox.isChecked():
                     selected_options.append(self.predefined_options[i])
-
-        if not selected_options and not feedback_text:
-            self.feedback_text.setPlaceholderText("⚠ 请至少选择一个选项或输入反馈内容")
-            self.feedback_text.setFocus()
-            return
 
         final_feedback_parts = []
         if selected_options:
