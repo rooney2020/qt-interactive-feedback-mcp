@@ -430,6 +430,11 @@ class FeedbackContentWidget(QWidget):
                 if checkbox.isChecked():
                     selected_options.append(self.predefined_options[i])
 
+        if not selected_options and not feedback_text:
+            self.feedback_text.setPlaceholderText("⚠ 请至少选择一个选项或输入反馈内容")
+            self.feedback_text.setFocus()
+            return
+
         final_feedback_parts = []
         if selected_options:
             final_feedback_parts.append("; ".join(selected_options))
