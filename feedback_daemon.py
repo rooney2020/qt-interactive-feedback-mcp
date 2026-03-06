@@ -29,6 +29,7 @@ SOCKET_PATH = os.path.join("/tmp", "mcp_feedback_daemon.sock")
 LOCK_PATH = os.path.join("/tmp", "mcp_feedback_daemon.lock")
 
 request_queue: queue.Queue = queue.Queue()
+close_queue: queue.Queue = queue.Queue()
 response_dict: Dict[str, dict] = {}
 response_events: Dict[str, threading.Event] = {}
 
@@ -53,6 +54,7 @@ def _send_json(conn: socket.socket, obj: dict):
 
 def _handle_client(conn: socket.socket):
     """Handle a single client connection in its own thread."""
+    session_id = None
     try:
         request = _recv_json(conn)
         session_id = request.get("session_id", "unknown")
@@ -67,20 +69,31 @@ def _handle_client(conn: socket.socket):
                 try:
                     peek = conn.recv(1, socket.MSG_PEEK)
                     if not peek:
+                        print(f"[daemon] Client disconnected for session {session_id}", file=sys.stderr)
                         response_events.pop(session_id, None)
+                        close_queue.put(session_id)
                         return
                 except BlockingIOError:
                     pass
                 finally:
                     conn.setblocking(True)
             except (socket.error, OSError):
+                print(f"[daemon] Socket error for session {session_id}", file=sys.stderr)
                 response_events.pop(session_id, None)
+                close_queue.put(session_id)
                 return
 
         response = response_dict.pop(session_id, {"interactive_feedback": "", "images": []})
         _send_json(conn, response)
+    except ConnectionError:
+        if session_id:
+            response_events.pop(session_id, None)
+            close_queue.put(session_id)
     except Exception as e:
         print(f"[daemon] Error handling client: {e}", file=sys.stderr)
+        if session_id:
+            response_events.pop(session_id, None)
+            close_queue.put(session_id)
     finally:
         try:
             conn.close()
@@ -140,13 +153,20 @@ class DaemonWindow(QMainWindow):
         self._poll_timer.start(100)
 
     def _poll_requests(self):
-        """Check for new requests from the socket server thread."""
+        """Check for new requests and close requests from the socket server thread."""
         while not request_queue.empty():
             try:
                 data = request_queue.get_nowait()
             except queue.Empty:
                 break
             self._add_tab(data)
+
+        while not close_queue.empty():
+            try:
+                session_id = close_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._close_tab_by_session(session_id)
 
     def _add_tab(self, data: dict):
         session_id = data.get("session_id", "unknown")
@@ -173,6 +193,19 @@ class DaemonWindow(QMainWindow):
         self.raise_()
 
         self._activate_input_method()
+
+    def _close_tab_by_session(self, session_id: str):
+        """Close a tab when the MCP client disconnects (e.g. Cursor timeout)."""
+        tab = self._session_tabs.pop(session_id, None)
+        if tab:
+            index = self.tabs.indexOf(tab)
+            if index >= 0:
+                self.tabs.removeTab(index)
+            tab.deleteLater()
+            print(f"[daemon] Closed orphaned tab for session {session_id}", file=sys.stderr)
+
+        if self.tabs.count() == 0:
+            self.hide()
 
     def _on_tab_submitted(self, session_id: str, result: dict):
         tab = self._session_tabs.pop(session_id, None)
