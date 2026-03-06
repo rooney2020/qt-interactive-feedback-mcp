@@ -103,11 +103,42 @@ QCheckBox::indicator:checked {{
 QCheckBox::indicator:hover {{
     border-color: {ACCENT_BLUE};
 }}
+QTabWidget::pane {{
+    border: 1px solid {DARK_BORDER};
+    background-color: {DARK_BG};
+    border-radius: 4px;
+}}
+QTabBar::tab {{
+    background-color: {DARK_SURFACE};
+    color: {TEXT_SECONDARY};
+    border: 1px solid {DARK_BORDER};
+    border-bottom: none;
+    padding: 6px 16px;
+    margin-right: 2px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    font-size: 12px;
+}}
+QTabBar::tab:selected {{
+    background-color: {DARK_BG};
+    color: {ACCENT_BLUE};
+    font-weight: bold;
+}}
+QTabBar::tab:hover {{
+    background-color: #333350;
+    color: {TEXT_PRIMARY};
+}}
+QTabBar::close-button {{
+    image: none;
+    subcontrol-position: right;
+    padding: 2px;
+}}
 """
 
 
 class FeedbackTextEdit(QTextEdit):
     image_pasted = Signal(QImage)
+    submit_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -115,11 +146,7 @@ class FeedbackTextEdit(QTextEdit):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
-            parent = self.parent()
-            while parent and not isinstance(parent, FeedbackUI):
-                parent = parent.parent()
-            if parent:
-                parent._submit_feedback()
+            self.submit_requested.emit()
         elif event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
             clipboard = QApplication.clipboard()
             if clipboard.mimeData() and clipboard.mimeData().hasImage():
@@ -220,46 +247,19 @@ class ScreenshotThumbnail(QWidget):
         self._zoom_dialog.show()
 
 
-class FeedbackUI(QMainWindow):
-    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None, window_id: str = "0"):
-        super().__init__()
+class FeedbackContentWidget(QWidget):
+    """Reusable feedback form widget - used both standalone and as tab content."""
+    feedback_submitted = Signal(dict)
+
+    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None, parent=None):
+        super().__init__(parent)
         self.prompt = prompt
         self.predefined_options = predefined_options or []
-        self.feedback_result = None
         self.screenshots: List[QPixmap] = []
-
-        title = "MCP \u53cd\u9988\u52a9\u624b"
-        if window_id and window_id != "0":
-            title += f" #{window_id}"
-        self.setWindowTitle(title)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(script_dir, "images", "feedback.png")
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
-        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
-
-        self.settings = QSettings("InteractiveFeedbackMCP", "InteractiveFeedbackMCP")
-        self.settings.beginGroup("MainWindow_General")
-        geometry = self.settings.value("geometry")
-        if geometry:
-            self.restoreGeometry(geometry)
-        else:
-            self.resize(800, 700)
-            screen = QApplication.primaryScreen().geometry()
-            x = (screen.width() - 800) // 2
-            y = (screen.height() - 700) // 2
-            self.move(x, y)
-        state = self.settings.value("windowState")
-        if state:
-            self.restoreState(state)
-        self.settings.endGroup()
-
         self._create_ui()
 
     def _create_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 8, 12, 8)
         main_layout.setSpacing(6)
 
@@ -331,6 +331,7 @@ class FeedbackUI(QMainWindow):
 
         self.feedback_text = FeedbackTextEdit()
         self.feedback_text.image_pasted.connect(self._on_image_pasted)
+        self.feedback_text.submit_requested.connect(self._submit_feedback)
         font_metrics = self.feedback_text.fontMetrics()
         row_height = font_metrics.height()
         padding = self.feedback_text.contentsMargins().top() + self.feedback_text.contentsMargins().bottom() + 5
@@ -365,32 +366,7 @@ class FeedbackUI(QMainWindow):
         submit_btn.clicked.connect(self._submit_feedback)
         bottom_layout.addWidget(submit_btn)
 
-
         main_layout.addLayout(bottom_layout)
-
-    # --- Screenshot methods ---
-
-    def _capture_screen(self):
-        self.showMinimized()
-        QTimer.singleShot(600, self._do_capture_screen)
-
-    def _do_capture_screen(self):
-        screen = QApplication.primaryScreen()
-        if screen:
-            pixmap = screen.grabWindow(0)
-            if not pixmap.isNull():
-                self._add_screenshot(pixmap)
-        self.showNormal()
-        self.activateWindow()
-        self.raise_()
-
-    def _paste_from_clipboard(self):
-        clipboard = QApplication.clipboard()
-        mime = clipboard.mimeData()
-        if mime and mime.hasImage():
-            image = clipboard.image()
-            if not image.isNull():
-                self._add_screenshot(QPixmap.fromImage(image))
 
     def _on_image_pasted(self, image: QImage):
         pixmap = QPixmap.fromImage(image)
@@ -419,10 +395,6 @@ class FeedbackUI(QMainWindow):
             self.screenshots.pop(index)
             self._update_thumbnails()
 
-    def _clear_screenshots(self):
-        self.screenshots.clear()
-        self._update_thumbnails()
-
     def _update_thumbnails(self):
         while self.thumbnails_layout.count():
             item = self.thumbnails_layout.takeAt(0)
@@ -449,8 +421,6 @@ class FeedbackUI(QMainWindow):
         buffer.close()
         return byte_array.toBase64().data().decode('ascii')
 
-    # --- Submit / Close ---
-
     def _submit_feedback(self):
         feedback_text = self.feedback_text.toPlainText().strip()
         selected_options = []
@@ -467,17 +437,55 @@ class FeedbackUI(QMainWindow):
             final_feedback_parts.append(feedback_text)
 
         final_feedback = "\n\n".join(final_feedback_parts)
-
         images_b64 = [self._pixmap_to_base64(p) for p in self.screenshots]
 
-        self.feedback_result = FeedbackResult(
+        result = FeedbackResult(
             interactive_feedback=final_feedback,
             images=images_b64,
         )
-        self.close()
+        self.feedback_submitted.emit(result)
 
-    def keyPressEvent(self, event: QKeyEvent):
-        super().keyPressEvent(event)
+
+class FeedbackUI(QMainWindow):
+    """Standalone feedback window (legacy mode / fallback)."""
+
+    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None, window_id: str = "0"):
+        super().__init__()
+        self.feedback_result = None
+
+        title = "MCP \u53cd\u9988\u52a9\u624b"
+        if window_id and window_id != "0":
+            title += f" #{window_id}"
+        self.setWindowTitle(title)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(script_dir, "images", "feedback.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+
+        self.settings = QSettings("InteractiveFeedbackMCP", "InteractiveFeedbackMCP")
+        self.settings.beginGroup("MainWindow_General")
+        geometry = self.settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+        else:
+            self.resize(800, 700)
+            screen = QApplication.primaryScreen().geometry()
+            x = (screen.width() - 800) // 2
+            y = (screen.height() - 700) // 2
+            self.move(x, y)
+        state = self.settings.value("windowState")
+        if state:
+            self.restoreState(state)
+        self.settings.endGroup()
+
+        self.content = FeedbackContentWidget(prompt, predefined_options)
+        self.content.feedback_submitted.connect(self._on_submitted)
+        self.setCentralWidget(self.content)
+
+    def _on_submitted(self, result):
+        self.feedback_result = result
+        self.close()
 
     def closeEvent(self, event):
         self.settings.beginGroup("MainWindow_General")
