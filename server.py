@@ -27,6 +27,7 @@ HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
 
 _SERVER_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_server.log")
+_SESSION_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_sessions.log")
 
 def _slog(msg: str):
     """Write log to server log file."""
@@ -35,6 +36,19 @@ def _slog(msg: str):
     try:
         with open(_SERVER_LOG_PATH, "a") as f:
             f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+def _session_log(session_id: str, elapsed: float, status: str, detail: str = ""):
+    """Write session summary to dedicated session log."""
+    import datetime
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] session={session_id}  elapsed={elapsed:.1f}s  status={status}"
+    if detail:
+        line += f"  {detail}"
+    try:
+        with open(_SESSION_LOG_PATH, "a") as f:
+            f.write(line + "\n")
     except Exception:
         pass
 
@@ -132,8 +146,9 @@ async def _send_to_daemon(
     predefined_options: list[str] | None = None,
     tab_title: str = "",
     ctx: Context | None = None,
-) -> dict:
-    """Send a feedback request to the daemon and wait for the response."""
+) -> tuple[dict, float, str]:
+    """Send a feedback request to the daemon and wait for the response.
+    Returns (result_dict, elapsed_seconds, session_id)."""
     session_id = uuid.uuid4().hex[:12]
     request = {
         "session_id": session_id,
@@ -170,7 +185,8 @@ async def _send_to_daemon(
                 img_count = len(parsed.get("images", []))
                 text_len = len(parsed.get("interactive_feedback", ""))
                 _slog(f"[{session_id}] Parsed: text={text_len}, images={img_count}")
-                return parsed
+                _session_log(session_id, elapsed, "ok", f"text={text_len} images={img_count}")
+                return parsed, elapsed, session_id
 
             elapsed += POLL_INTERVAL
             if ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
@@ -186,8 +202,10 @@ async def _send_to_daemon(
                     heartbeat_failures += 1
                     if heartbeat_failures >= MAX_HEARTBEAT_FAILURES:
                         writer.close()
+                        _session_log(session_id, elapsed, "timeout", "lost MCP client connection")
                         raise RuntimeError("Lost connection to MCP client")
     except (ConnectionResetError, BrokenPipeError):
+        _session_log(session_id, elapsed, "error", "daemon connection lost")
         raise RuntimeError("Daemon connection lost")
     finally:
         if not readline_task.done():
@@ -300,6 +318,9 @@ async def interactive_feedback(
     max_attempts = 2
     last_error = None
 
+    session_elapsed = 0.0
+    session_id_str = ""
+
     if _USE_DAEMON:
         if not tab_title:
             tab_title = f"\u4f1a\u8bdd #{os.getpid()}"
@@ -307,7 +328,7 @@ async def interactive_feedback(
             try:
                 _slog(f"Attempt {attempt+1}/{max_attempts} to send to daemon")
                 await _ensure_daemon_running()
-                result = await _send_to_daemon(
+                result, session_elapsed, session_id_str = await _send_to_daemon(
                     message, predefined_options_list, tab_title=tab_title, ctx=ctx
                 )
                 _slog(f"Success on attempt {attempt+1}")

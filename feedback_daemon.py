@@ -205,8 +205,8 @@ class DaemonWindow(QMainWindow):
         self.tabs.setCurrentIndex(index)
         self._session_tabs[session_id] = tab
 
-        if not self.isVisible():
-            self.show()
+        self.setVisible(True)
+        self.showNormal()
         self.activateWindow()
         self.raise_()
 
@@ -250,7 +250,7 @@ class DaemonWindow(QMainWindow):
             session_id = tab.property("session_id")
             if session_id:
                 self._session_tabs.pop(session_id, None)
-                response_dict[session_id] = {"interactive_feedback": "", "images": []}
+                response_dict[session_id] = {"interactive_feedback": "窗口可能被意外关闭，请发起新会话或重新连接", "images": []}
                 evt = response_events.pop(session_id, None)
                 if evt:
                     evt.set()
@@ -267,12 +267,18 @@ class DaemonWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._settings.setValue("daemon_geometry", self.saveGeometry())
+        _CLOSE_MSG = "窗口可能被意外关闭，请发起新会话或重新连接"
         for session_id in list(self._session_tabs.keys()):
-            response_dict[session_id] = {"interactive_feedback": "", "images": []}
+            response_dict[session_id] = {"interactive_feedback": _CLOSE_MSG, "images": []}
             evt = response_events.pop(session_id, None)
             if evt:
                 evt.set()
         self._session_tabs.clear()
+        while self.tabs.count() > 0:
+            w = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            if w:
+                w.deleteLater()
         self.hide()
         event.ignore()
 
