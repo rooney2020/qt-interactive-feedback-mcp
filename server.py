@@ -9,7 +9,12 @@ import base64
 import tempfile
 import asyncio
 import uuid
-import socket
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
+    import socket
 
 from fastmcp import FastMCP, Context
 from fastmcp.utilities.types import Image
@@ -20,9 +25,52 @@ mcp = FastMCP("Interactive Feedback MCP")
 POLL_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
+
+_USE_DAEMON = sys.platform != "win32"
 SOCKET_PATH = os.path.join("/tmp", "mcp_feedback_daemon.sock")
 DAEMON_STARTUP_TIMEOUT = 10.0
+_LOCK_DIR = os.path.join(tempfile.gettempdir(), "mcp_feedback_windows")
 
+
+# ── Windows: standalone window management (lock-based) ──────────────────
+
+def _acquire_window_id() -> tuple[int, object]:
+    """Acquire a globally unique window ID using file locks across processes."""
+    os.makedirs(_LOCK_DIR, exist_ok=True)
+    window_id = 1
+    while True:
+        lock_path = os.path.join(_LOCK_DIR, f"window_{window_id}.lock")
+        fd = open(lock_path, "w")
+        try:
+            if sys.platform == "win32":
+                msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fd.write(str(os.getpid()))
+            fd.flush()
+            return window_id, fd
+        except (IOError, OSError):
+            fd.close()
+            window_id += 1
+
+
+def _release_window_id(fd):
+    """Release a window ID lock by closing the file descriptor."""
+    try:
+        lock_path = fd.name
+        if sys.platform == "win32":
+            try:
+                fd.seek(0)
+                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except (IOError, OSError):
+                pass
+        fd.close()
+        os.unlink(lock_path)
+    except (OSError, AttributeError):
+        pass
+
+
+# ── Unix: daemon-based single window (socket IPC) ───────────────────────
 
 async def _ensure_daemon_running():
     """Start the feedback daemon if not already running."""
@@ -120,13 +168,15 @@ async def _send_to_daemon(
             raise RuntimeError("Daemon connection lost")
 
 
+# ── Common: standalone subprocess launcher (fallback / Windows) ──────────
+
 async def _launch_feedback_standalone(
     summary: str,
     predefined_options: list[str] | None = None,
     ctx: Context | None = None,
     window_id: int = 1,
 ) -> dict:
-    """Fallback: launch feedback_ui.py as a standalone subprocess (legacy mode)."""
+    """Launch feedback_ui.py as a standalone subprocess."""
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         output_file = tmp.name
 
@@ -205,6 +255,8 @@ async def _launch_feedback_standalone(
         raise e
 
 
+# ── MCP Tool ─────────────────────────────────────────────────────────────
+
 @mcp.tool()
 async def interactive_feedback(
     message: str = Field(description="The specific question for the user"),
@@ -214,35 +266,54 @@ async def interactive_feedback(
     """Request interactive feedback from the user. Supports text and screenshot responses."""
     predefined_options_list = predefined_options if isinstance(predefined_options, list) else None
 
-    window_id = os.getpid()
-    tab_title = f"\u4f1a\u8bdd #{window_id}"
-
     max_attempts = 2
     last_error = None
 
-    for attempt in range(max_attempts):
-        try:
-            await _ensure_daemon_running()
-            result = await _send_to_daemon(
-                message, predefined_options_list, tab_title=tab_title, ctx=ctx
-            )
-            break
-        except Exception as e:
-            last_error = e
-            if attempt < max_attempts - 1:
-                continue
+    if _USE_DAEMON:
+        tab_title = f"\u4f1a\u8bdd #{os.getpid()}"
+        for attempt in range(max_attempts):
             try:
-                result = await _launch_feedback_standalone(
-                    message, predefined_options_list, ctx, window_id=1
+                await _ensure_daemon_running()
+                result = await _send_to_daemon(
+                    message, predefined_options_list, tab_title=tab_title, ctx=ctx
                 )
                 break
-            except Exception as fallback_err:
+            except Exception as e:
+                last_error = e
+                if attempt < max_attempts - 1:
+                    continue
+                try:
+                    result = await _launch_feedback_standalone(
+                        message, predefined_options_list, ctx, window_id=1
+                    )
+                    break
+                except Exception as fallback_err:
+                    return {
+                        "interactive_feedback": (
+                            f"[Feedback UI failed: daemon={last_error}, standalone={fallback_err}. "
+                            "Please use AskQuestion tool as fallback.]"
+                        )
+                    }
+    else:
+        window_id, lock_fd = _acquire_window_id()
+        for attempt in range(max_attempts):
+            try:
+                result = await _launch_feedback_standalone(
+                    message, predefined_options_list, ctx, window_id=window_id
+                )
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < max_attempts - 1:
+                    continue
+                _release_window_id(lock_fd)
                 return {
                     "interactive_feedback": (
-                        f"[Feedback UI failed: daemon={last_error}, standalone={fallback_err}. "
+                        f"[Feedback UI failed after {max_attempts} attempts: {last_error}. "
                         "Please use AskQuestion tool as fallback.]"
                     )
                 }
+        _release_window_id(lock_fd)
 
     text = result.get("interactive_feedback", "")
     images_b64 = result.get("images", [])
