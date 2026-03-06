@@ -138,17 +138,21 @@ async def _send_to_daemon(
     last_heartbeat = 0.0
     heartbeat_failures = 0
 
-    while True:
-        try:
-            line = await asyncio.wait_for(reader.readline(), timeout=POLL_INTERVAL)
-            if line:
+    readline_task = asyncio.create_task(reader.readline())
+    try:
+        while True:
+            done, _ = await asyncio.wait([readline_task], timeout=POLL_INTERVAL)
+            if done:
+                line = readline_task.result()
                 writer.close()
                 try:
                     await writer.wait_closed()
                 except Exception:
                     pass
+                if not line:
+                    raise RuntimeError("Daemon connection lost (EOF)")
                 return json.loads(line.decode("utf-8").strip())
-        except asyncio.TimeoutError:
+
             elapsed += POLL_INTERVAL
             if ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
                 last_heartbeat = elapsed
@@ -164,8 +168,15 @@ async def _send_to_daemon(
                     if heartbeat_failures >= MAX_HEARTBEAT_FAILURES:
                         writer.close()
                         raise RuntimeError("Lost connection to MCP client")
-        except (ConnectionResetError, BrokenPipeError):
-            raise RuntimeError("Daemon connection lost")
+    except (ConnectionResetError, BrokenPipeError):
+        raise RuntimeError("Daemon connection lost")
+    finally:
+        if not readline_task.done():
+            readline_task.cancel()
+            try:
+                await readline_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 # ── Common: standalone subprocess launcher (fallback / Windows) ──────────
