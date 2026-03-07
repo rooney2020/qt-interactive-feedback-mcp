@@ -204,6 +204,9 @@ async def _send_to_daemon(
                         writer.close()
                         _session_log(session_id, elapsed, "timeout", "lost MCP client connection")
                         raise RuntimeError("Lost connection to MCP client")
+    except asyncio.CancelledError:
+        _session_log(session_id, elapsed, "cancelled", "MCP call cancelled (likely Cursor timeout)")
+        raise
     except (ConnectionResetError, BrokenPipeError):
         _session_log(session_id, elapsed, "error", "daemon connection lost")
         raise RuntimeError("Daemon connection lost")
