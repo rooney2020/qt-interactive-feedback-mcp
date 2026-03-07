@@ -165,12 +165,17 @@ class DaemonWindow(QMainWindow):
 
         self._session_tabs: Dict[str, FeedbackContentWidget] = {}
 
-        self._poll_timer = QTimer()
+        self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_requests)
         self._poll_timer.start(100)
+        self._poll_count = 0
 
     def _poll_requests(self):
         """Check for new requests and close requests from the socket server thread."""
+        self._poll_count += 1
+        if self._poll_count % 300 == 0:  # every 30s
+            _log(f"Poll heartbeat #{self._poll_count}, queue={request_queue.qsize()}, close={close_queue.qsize()}, tabs={self.tabs.count()}, visible={self.isVisible()}")
+
         while not request_queue.empty():
             try:
                 data = request_queue.get_nowait()

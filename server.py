@@ -25,6 +25,7 @@ mcp = FastMCP("Interactive Feedback MCP")
 POLL_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
+SOFT_TIMEOUT = 3500  # seconds (~58 min); return heartbeat before Cursor's hard timeout
 
 _SERVER_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_server.log")
 _SESSION_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_sessions.log")
@@ -189,6 +190,13 @@ async def _send_to_daemon(
                 return parsed, elapsed, session_id
 
             elapsed += POLL_INTERVAL
+
+            if elapsed >= SOFT_TIMEOUT:
+                _slog(f"[{session_id}] Soft timeout at {elapsed:.0f}s, returning heartbeat")
+                _session_log(session_id, elapsed, "heartbeat", "soft timeout, will reconnect")
+                writer.close()
+                return {"interactive_feedback": "[心跳]", "images": []}, elapsed, session_id
+
             if ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
                 last_heartbeat = elapsed
                 try:
