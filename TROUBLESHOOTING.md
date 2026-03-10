@@ -76,21 +76,23 @@ pkill -f "feedback_daemon.py"
 rm -f /tmp/mcp_feedback_daemon.sock /tmp/mcp_feedback_daemon.lock
 ```
 
-### 3. Daemon 进程存在但 UI 无响应
+### 3. Daemon 进程存在但 UI 无响应（heartbeat 停止）
 
-**症状：** `pgrep -f feedback_daemon.py` 返回 PID，但窗口无反应或不处理新请求。
+**症状：** `pgrep -f feedback_daemon.py` 返回 PID，但窗口不处理新请求，日志中没有新的 heartbeat。
 
-**原因：** Qt 事件循环的 `_poll_timer` 可能因未捕获异常而停止。
+**历史根因（已修复）：** Cursor 启动 daemon 时使用 `stderr=PIPE`。当 server.py 被杀后管道断裂，`_log()` 中的 `print(file=sys.stderr)` 抛出 `BrokenPipeError`，导致日志停止写入、close_queue 处理异常。
 
-**已修复：** 
-- `_poll_requests` 已用 `try...except` 包裹，异常不再导致 timer 停止
+**已修复：**
+- `_log()` 中 stderr 写入已加 `try/except(BrokenPipeError)`
+- server.py 启动 daemon 时 stderr 改为 `DEVNULL`
+- `_poll_requests` 已用 `try...except` 包裹
 - 新增 60 秒间隔的 `_watchdog_timer`，自动检测并重启卡死的 `_poll_timer`
 
-**如果 watchdog 也无效：**
+**如果仍然出现：**
 
 ```bash
 # 查看日志中是否有 CRITICAL 或 WATCHDOG 关键字
-grep -E "CRITICAL|WATCHDOG|ERROR" /tmp/mcp_feedback_daemon.log | tail -20
+grep -E "CRITICAL|WATCHDOG|ERROR|BrokenPipe" /tmp/mcp_feedback_daemon.log | tail -20
 
 # 强制重启
 pkill -f "feedback_daemon.py"
