@@ -117,7 +117,7 @@ async def _ensure_daemon_running():
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", daemon_path,
         stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
         stdin=asyncio.subprocess.DEVNULL,
         env=env,
         start_new_session=True,

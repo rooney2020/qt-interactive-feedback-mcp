@@ -34,7 +34,10 @@ def _log(msg: str):
     import datetime
     ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     line = f"[{ts}] {msg}"
-    print(f"[daemon] {line}", file=sys.stderr)
+    try:
+        print(f"[daemon] {line}", file=sys.stderr)
+    except (BrokenPipeError, OSError):
+        pass
     try:
         with open(LOG_PATH, "a") as f:
             f.write(line + "\n")
