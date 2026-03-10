@@ -102,8 +102,10 @@ def _release_window_id(fd):
 async def _ensure_daemon_running():
     """Start the feedback daemon if not already running."""
     if _daemon_is_alive():
+        _slog("Daemon already alive")
         return
 
+    _slog("Daemon not alive, starting...")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     daemon_path = os.path.join(script_dir, "feedback_daemon.py")
 
@@ -112,7 +114,7 @@ async def _ensure_daemon_running():
         env.setdefault("QT_IM_MODULE", "fcitx")
         env.setdefault("XMODIFIERS", "@im=fcitx")
 
-    await asyncio.create_subprocess_exec(
+    proc = await asyncio.create_subprocess_exec(
         sys.executable, "-u", daemon_path,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
@@ -120,11 +122,13 @@ async def _ensure_daemon_running():
         env=env,
         start_new_session=True,
     )
+    _slog(f"Daemon process launched, pid={proc.pid}")
 
     deadline = asyncio.get_event_loop().time() + DAEMON_STARTUP_TIMEOUT
     while asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(0.2)
         if _daemon_is_alive():
+            _slog("Daemon is now alive and accepting connections")
             return
 
     raise RuntimeError("Failed to start feedback daemon within timeout")
@@ -138,7 +142,8 @@ def _daemon_is_alive() -> bool:
         sock.connect(SOCKET_PATH)
         sock.close()
         return True
-    except (socket.error, FileNotFoundError, OSError):
+    except (socket.error, FileNotFoundError, OSError) as e:
+        _slog(f"Daemon not alive: {type(e).__name__}: {e}")
         return False
 
 
@@ -219,6 +224,11 @@ async def _send_to_daemon(
         _session_log(session_id, elapsed, "error", "daemon connection lost")
         raise RuntimeError("Daemon connection lost")
     finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
         if not readline_task.done():
             readline_task.cancel()
             try:

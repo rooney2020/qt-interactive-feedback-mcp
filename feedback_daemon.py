@@ -102,12 +102,13 @@ def _handle_client(conn: socket.socket):
         _log(f"Sending response for {session_id}: {resp_size} bytes, {img_count} images")
         _send_json(conn, response)
         _log(f"Response sent successfully for {session_id}")
-    except ConnectionError:
+    except ConnectionError as e:
+        _log(f"Client connection error for {session_id}: {e}")
         if session_id:
             response_events.pop(session_id, None)
             close_queue.put(session_id)
     except Exception as e:
-        _log(f"Error handling client: {e}")
+        _log(f"Unexpected error handling client {session_id}: {type(e).__name__}: {e}")
         if session_id:
             response_events.pop(session_id, None)
             close_queue.put(session_id)
@@ -122,17 +123,21 @@ def _socket_server():
     """Run the socket server (called in a daemon thread)."""
     if os.path.exists(SOCKET_PATH):
         os.unlink(SOCKET_PATH)
+        _log(f"Removed stale socket: {SOCKET_PATH}")
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(SOCKET_PATH)
     server.listen(16)
     os.chmod(SOCKET_PATH, 0o700)
+    _log(f"Socket server listening on {SOCKET_PATH}")
 
     while True:
         try:
             conn, _ = server.accept()
+            _log("Accepted new client connection")
             threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
-        except OSError:
+        except OSError as e:
+            _log(f"Socket server stopped: {e}")
             break
 
 
@@ -169,66 +174,85 @@ class DaemonWindow(QMainWindow):
         self._poll_timer.timeout.connect(self._poll_requests)
         self._poll_timer.start(100)
         self._poll_count = 0
+        self._last_poll_time = 0
+
+        self._watchdog_timer = QTimer(self)
+        self._watchdog_timer.timeout.connect(self._watchdog_check)
+        self._watchdog_timer.start(60000)  # every 60s
 
     def _poll_requests(self):
         """Check for new requests and close requests from the socket server thread."""
-        self._poll_count += 1
-        if self._poll_count % 300 == 0:  # every 30s
-            _log(f"Poll heartbeat #{self._poll_count}, queue={request_queue.qsize()}, close={close_queue.qsize()}, tabs={self.tabs.count()}, visible={self.isVisible()}")
+        try:
+            self._poll_count += 1
+            if self._poll_count % 300 == 0:  # every 30s
+                _log(f"Poll heartbeat #{self._poll_count}, queue={request_queue.qsize()}, close={close_queue.qsize()}, tabs={self.tabs.count()}, visible={self.isVisible()}")
+            self._last_poll_time = self._poll_count
 
-        while not request_queue.empty():
-            try:
-                data = request_queue.get_nowait()
-            except queue.Empty:
-                break
-            self._add_tab(data)
+            while not request_queue.empty():
+                try:
+                    data = request_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._add_tab(data)
 
-        while not close_queue.empty():
-            try:
-                session_id = close_queue.get_nowait()
-            except queue.Empty:
-                break
-            self._close_tab_by_session(session_id)
+            while not close_queue.empty():
+                try:
+                    session_id = close_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._close_tab_by_session(session_id)
+        except Exception as e:
+            _log(f"CRITICAL: _poll_requests exception: {e}")
 
     def _add_tab(self, data: dict):
         session_id = data.get("session_id", "unknown")
-        _log(f"Adding new tab for session {session_id}")
-        message = data.get("message", "")
-        options = data.get("predefined_options") or None
-        tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
+        try:
+            _log(f"Adding new tab for session {session_id}")
+            message = data.get("message", "")
+            options = data.get("predefined_options") or None
+            tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
 
-        if isinstance(options, list):
-            options = [str(o) for o in options if o]
-            if not options:
-                options = None
+            if isinstance(options, list):
+                options = [str(o) for o in options if o]
+                if not options:
+                    options = None
 
-        tab = FeedbackContentWidget(message, options)
-        tab.setProperty("session_id", session_id)
-        tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))
+            tab = FeedbackContentWidget(message, options)
+            tab.setProperty("session_id", session_id)
+            tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))
 
-        index = self.tabs.addTab(tab, tab_title)
-        self.tabs.setCurrentIndex(index)
-        self._session_tabs[session_id] = tab
+            index = self.tabs.addTab(tab, tab_title)
+            self.tabs.setCurrentIndex(index)
+            self._session_tabs[session_id] = tab
 
-        self.setVisible(True)
-        self.showNormal()
-        self.activateWindow()
-        self.raise_()
+            self.setVisible(True)
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
 
-        self._activate_input_method()
+            self._activate_input_method()
+        except Exception as e:
+            _log(f"ERROR in _add_tab for {session_id}: {e}")
+            response_dict[session_id] = {"interactive_feedback": f"[UI error: {e}]", "images": []}
+            evt = response_events.pop(session_id, None)
+            if evt:
+                evt.set()
 
     def _close_tab_by_session(self, session_id: str):
         """Close a tab when the MCP client disconnects (e.g. Cursor timeout)."""
-        tab = self._session_tabs.pop(session_id, None)
-        if tab:
-            index = self.tabs.indexOf(tab)
-            if index >= 0:
-                self.tabs.removeTab(index)
-            tab.deleteLater()
-            _log(f"Closed orphaned tab for session {session_id}")
+        try:
+            tab = self._session_tabs.pop(session_id, None)
+            if tab:
+                index = self.tabs.indexOf(tab)
+                if index >= 0:
+                    self.tabs.removeTab(index)
+                tab.deleteLater()
+                _log(f"Closed orphaned tab for session {session_id}")
 
-        if self.tabs.count() == 0:
-            self.hide()
+            if self.tabs.count() == 0:
+                self.hide()
+        except Exception as e:
+            _log(f"ERROR in _close_tab_by_session for {session_id}: {e}")
 
     def _on_tab_submitted(self, session_id: str, result: dict):
         img_count = len(result.get("images", []))
@@ -253,6 +277,7 @@ class DaemonWindow(QMainWindow):
         tab = self.tabs.widget(index)
         if isinstance(tab, FeedbackContentWidget):
             session_id = tab.property("session_id")
+            _log(f"Tab close requested by user: index={index}, session={session_id}")
             if session_id:
                 self._session_tabs.pop(session_id, None)
                 response_dict[session_id] = {"interactive_feedback": "窗口可能被意外关闭，请发起新会话或重新连接", "images": []}
@@ -262,7 +287,17 @@ class DaemonWindow(QMainWindow):
         self.tabs.removeTab(index)
 
         if self.tabs.count() == 0:
+            _log("All tabs closed, hiding window")
             self.hide()
+
+    def _watchdog_check(self):
+        """Restart poll timer if it appears stuck."""
+        expected_polls = self._poll_count
+        if hasattr(self, '_prev_watchdog_count') and expected_polls == self._prev_watchdog_count:
+            _log(f"WATCHDOG: poll timer appears stuck at {expected_polls}, restarting")
+            self._poll_timer.stop()
+            self._poll_timer.start(100)
+        self._prev_watchdog_count = expected_polls
 
     def _activate_input_method(self):
         try:
@@ -271,6 +306,7 @@ class DaemonWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
+        _log(f"Window closeEvent triggered, {len(self._session_tabs)} active sessions")
         self._settings.setValue("daemon_geometry", self.saveGeometry())
         _CLOSE_MSG = "窗口可能被意外关闭，请发起新会话或重新连接"
         for session_id in list(self._session_tabs.keys()):
@@ -289,30 +325,34 @@ class DaemonWindow(QMainWindow):
 
 
 def main():
+    _log(f"Daemon starting, pid={os.getpid()}")
     lock_fd = open(LOCK_PATH, "w")
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (IOError, OSError):
+        _log("Another daemon instance is already running, exiting")
         print("[daemon] Another instance is already running.", file=sys.stderr)
         sys.exit(1)
 
     lock_fd.write(str(os.getpid()))
     lock_fd.flush()
+    _log(f"Lock acquired: {LOCK_PATH}")
 
     srv_thread = threading.Thread(target=_socket_server, daemon=True)
     srv_thread.start()
+    _log("Socket server thread started")
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(GLOBAL_STYLE)
     app.setQuitOnLastWindowClosed(False)
 
-    env = os.environ
     if sys.platform == "linux":
         os.environ.setdefault("QT_IM_MODULE", "fcitx")
         os.environ.setdefault("XMODIFIERS", "@im=fcitx")
 
     window = DaemonWindow()
+    _log("DaemonWindow created, entering event loop")
 
     def _shutdown(*_):
         app.quit()
