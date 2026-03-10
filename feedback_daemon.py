@@ -76,7 +76,7 @@ def _handle_client(conn: socket.socket):
         response_events[session_id] = event
         request_queue.put(request)
 
-        while not event.wait(timeout=2.0):
+        while not event.wait(timeout=0.5):
             try:
                 conn.setblocking(False)
                 try:
@@ -255,40 +255,50 @@ class DaemonWindow(QMainWindow):
             _log(f"ERROR in _close_tab_by_session for {session_id}: {e}")
 
     def _on_tab_submitted(self, session_id: str, result: dict):
-        img_count = len(result.get("images", []))
-        text_len = len(result.get("interactive_feedback", ""))
-        _log(f"Tab submitted for {session_id}: text={text_len} chars, images={img_count}")
-        tab = self._session_tabs.pop(session_id, None)
-        if tab:
-            index = self.tabs.indexOf(tab)
-            if index >= 0:
-                self.tabs.removeTab(index)
-            tab.deleteLater()
+        try:
+            img_count = len(result.get("images", []))
+            text_len = len(result.get("interactive_feedback", ""))
+            _log(f"Tab submitted for {session_id}: text={text_len} chars, images={img_count}")
+            tab = self._session_tabs.pop(session_id, None)
+            if tab:
+                index = self.tabs.indexOf(tab)
+                if index >= 0:
+                    self.tabs.removeTab(index)
+                tab.deleteLater()
 
-        response_dict[session_id] = result
-        evt = response_events.pop(session_id, None)
-        if evt:
-            evt.set()
+            response_dict[session_id] = result
+            evt = response_events.pop(session_id, None)
+            if evt:
+                evt.set()
 
-        if self.tabs.count() == 0:
-            self.hide()
+            if self.tabs.count() == 0:
+                self.hide()
+        except Exception as e:
+            _log(f"ERROR in _on_tab_submitted for {session_id}: {e}")
+            response_dict[session_id] = result or {"interactive_feedback": f"[submit error: {e}]", "images": []}
+            evt = response_events.pop(session_id, None)
+            if evt:
+                evt.set()
 
     def _on_tab_close_requested(self, index: int):
-        tab = self.tabs.widget(index)
-        if isinstance(tab, FeedbackContentWidget):
-            session_id = tab.property("session_id")
-            _log(f"Tab close requested by user: index={index}, session={session_id}")
-            if session_id:
-                self._session_tabs.pop(session_id, None)
-                response_dict[session_id] = {"interactive_feedback": "窗口可能被意外关闭，请发起新会话或重新连接", "images": []}
-                evt = response_events.pop(session_id, None)
-                if evt:
-                    evt.set()
-        self.tabs.removeTab(index)
+        try:
+            tab = self.tabs.widget(index)
+            if isinstance(tab, FeedbackContentWidget):
+                session_id = tab.property("session_id")
+                _log(f"Tab close requested by user: index={index}, session={session_id}")
+                if session_id:
+                    self._session_tabs.pop(session_id, None)
+                    response_dict[session_id] = {"interactive_feedback": "窗口可能被意外关闭，请发起新会话或重新连接", "images": []}
+                    evt = response_events.pop(session_id, None)
+                    if evt:
+                        evt.set()
+            self.tabs.removeTab(index)
 
-        if self.tabs.count() == 0:
-            _log("All tabs closed, hiding window")
-            self.hide()
+            if self.tabs.count() == 0:
+                _log("All tabs closed, hiding window")
+                self.hide()
+        except Exception as e:
+            _log(f"ERROR in _on_tab_close_requested index={index}: {e}")
 
     def _watchdog_check(self):
         """Restart poll timer if it appears stuck."""
