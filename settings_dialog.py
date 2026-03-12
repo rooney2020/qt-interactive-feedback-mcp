@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QSettings, Signal, QObject
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _VERSION_FILE = os.path.join(_SCRIPT_DIR, "VERSION")
 _REMOTE_VERSION_URL = (
-    "https://raw.githubusercontent.com/rooney2020/qt-interactive-feedback-mcp/main/VERSION"
+    "https://api.github.com/repos/rooney2020/qt-interactive-feedback-mcp/contents/VERSION"
 )
 
 DARK_BG = "#1e1e2e"
@@ -46,7 +46,8 @@ def check_version_async(callback):
         try:
             req = urllib.request.Request(_REMOTE_VERSION_URL, method="GET")
             req.add_header("User-Agent", "MCP-Feedback-Assistant")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            req.add_header("Accept", "application/vnd.github.raw+json")
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 remote = resp.read().decode("utf-8").strip()
             sig.result.emit(remote, "")
         except Exception as e:
@@ -91,16 +92,9 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("MCP 反馈助手 - 设置")
         self.setMinimumWidth(420)
+        _check_svg = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
         self.setStyleSheet(f"""
             QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}
-            QGroupBox {{
-                background-color: {DARK_SURFACE}; border: 1px solid {DARK_BORDER};
-                border-radius: 6px; margin-top: 12px; padding: 12px 10px 8px;
-                font-size: 13px; font-weight: bold; color: {ACCENT_BLUE};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin; subcontrol-position: top left; padding: 0 6px;
-            }}
             QCheckBox {{ spacing: 8px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 4px 0; }}
             QCheckBox::indicator {{
                 width: 16px; height: 16px; border-radius: 3px;
@@ -108,6 +102,7 @@ class SettingsDialog(QDialog):
             }}
             QCheckBox::indicator:checked {{
                 border-color: {ACCENT_BLUE}; background-color: {DARK_SURFACE};
+                image: url("{_check_svg}");
             }}
             QLabel {{ color: {TEXT_PRIMARY}; font-size: 13px; }}
             QTextEdit {{
@@ -124,37 +119,56 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        # Version info
+        # Version info + update status on same row
+        ver_row = QHBoxLayout()
         ver_label = QLabel(f"当前版本: {local_version()}")
         ver_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-        layout.addWidget(ver_label)
-
+        ver_row.addWidget(ver_label)
         self._update_label = QLabel("")
+        self._update_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
         self._update_label.setVisible(False)
-        layout.addWidget(self._update_label)
+        ver_row.addWidget(self._update_label)
+        ver_row.addStretch()
+        layout.addLayout(ver_row)
+
+        _section_style = (
+            f"QFrame {{ background-color: {DARK_SURFACE}; border: 1px solid {DARK_BORDER}; "
+            f"border-radius: 6px; padding: 10px; }}"
+        )
+        _section_title_style = (
+            f"color: {ACCENT_BLUE}; font-size: 13px; font-weight: bold; "
+            f"padding: 0; margin-top: 4px;"
+        )
 
         # Default toggles
-        group_defaults = QGroupBox("默认开关")
-        gl = QVBoxLayout(group_defaults)
+        lbl_defaults = QLabel("默认开关")
+        lbl_defaults.setStyleSheet(_section_title_style)
+        layout.addWidget(lbl_defaults)
+
+        frame_defaults = QFrame()
+        frame_defaults.setStyleSheet(_section_style)
+        gl = QVBoxLayout(frame_defaults)
+        gl.setContentsMargins(10, 8, 10, 8)
         self.cb_chinese = QCheckBox("使用中文（默认勾选）")
         self.cb_reread = QCheckBox("重新读取Rules（默认勾选）")
         self.cb_update = QCheckBox("启动时检查更新")
         gl.addWidget(self.cb_chinese)
         gl.addWidget(self.cb_reread)
         gl.addWidget(self.cb_update)
-        layout.addWidget(group_defaults)
+        layout.addWidget(frame_defaults)
 
         # Custom suffix
-        group_suffix = QGroupBox("自定义追加文本")
-        sl = QVBoxLayout(group_suffix)
+        lbl_suffix = QLabel("自定义追加文本")
+        lbl_suffix.setStyleSheet(_section_title_style)
+        layout.addWidget(lbl_suffix)
+
         hint = QLabel("每次提交反馈时自动追加的文本（留空则不追加）：")
         hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
-        sl.addWidget(hint)
+        layout.addWidget(hint)
         self.suffix_edit = QTextEdit()
         self.suffix_edit.setMaximumHeight(80)
         self.suffix_edit.setPlaceholderText("例如：请使用简洁的语言回复")
-        sl.addWidget(self.suffix_edit)
-        layout.addWidget(group_suffix)
+        layout.addWidget(self.suffix_edit)
 
         # Buttons
         btn_layout = QHBoxLayout()

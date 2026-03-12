@@ -366,6 +366,18 @@ class FeedbackContentWidget(QWidget):
         hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         bottom_layout = QHBoxLayout()
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setFixedSize(32, 32)
+        settings_btn.setToolTip("设置")
+        settings_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; font-size: 16px; padding: 0; }}"
+            f"QPushButton:hover {{ background: rgba(255,255,255,0.05); color: {TEXT_PRIMARY}; border-color: {ACCENT_BLUE}; }}"
+        )
+        settings_btn.clicked.connect(self._open_settings)
+        bottom_layout.addWidget(settings_btn)
+
         bottom_layout.addWidget(hint_label)
         bottom_layout.addStretch()
 
@@ -392,17 +404,6 @@ class FeedbackContentWidget(QWidget):
         self.chinese_mode_cb.setChecked(user_prefs.get(KEY_CHINESE_DEFAULT, True))
         self.chinese_mode_cb.setStyleSheet(_mini_cb_style)
         bottom_layout.addWidget(self.chinese_mode_cb)
-
-        settings_btn = QPushButton("⚙")
-        settings_btn.setFixedSize(32, 32)
-        settings_btn.setToolTip("设置")
-        settings_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
-            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; font-size: 16px; padding: 0; }}"
-            f"QPushButton:hover {{ background: rgba(255,255,255,0.05); color: {TEXT_PRIMARY}; border-color: {ACCENT_BLUE}; }}"
-        )
-        settings_btn.clicked.connect(self._open_settings)
-        bottom_layout.addWidget(settings_btn)
 
         self.submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
         self.submit_btn.setMinimumWidth(120)
