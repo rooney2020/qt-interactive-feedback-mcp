@@ -25,7 +25,16 @@ mcp = FastMCP("Interactive Feedback MCP")
 POLL_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
-SOFT_TIMEOUT = 43000  # seconds (~11.9h); return heartbeat before Cursor's hard timeout (43200s)
+
+def _load_soft_timeout() -> int:
+    """Load SOFT_TIMEOUT from QSettings. Falls back to 43000s if unavailable."""
+    try:
+        from settings_dialog import get_soft_timeout
+        return get_soft_timeout()
+    except Exception:
+        return 43000
+
+SOFT_TIMEOUT = _load_soft_timeout()
 
 def _adaptive_heartbeat_interval(elapsed: float) -> float:
     """Return heartbeat interval based on how long we've been waiting.

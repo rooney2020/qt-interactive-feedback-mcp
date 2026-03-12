@@ -19,7 +19,8 @@ from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage
 
 from settings_dialog import (
     SettingsDialog, load_settings, KEY_CHINESE_DEFAULT,
-    KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX,
+    KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX, BadgePushButton,
+    has_update_flag,
 )
 
 
@@ -367,16 +368,18 @@ class FeedbackContentWidget(QWidget):
 
         bottom_layout = QHBoxLayout()
 
-        settings_btn = QPushButton("⚙")
-        settings_btn.setFixedSize(32, 32)
-        settings_btn.setToolTip("设置")
-        settings_btn.setStyleSheet(
+        self._settings_btn = BadgePushButton("⚙")
+        self._settings_btn.setFixedSize(36, 36)
+        self._settings_btn.setToolTip("设置")
+        self._settings_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
-            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; font-size: 16px; padding: 0; }}"
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; font-size: 20px; padding: 0; }}"
             f"QPushButton:hover {{ background: rgba(255,255,255,0.05); color: {TEXT_PRIMARY}; border-color: {ACCENT_BLUE}; }}"
         )
-        settings_btn.clicked.connect(self._open_settings)
-        bottom_layout.addWidget(settings_btn)
+        self._settings_btn.clicked.connect(self._open_settings)
+        if has_update_flag():
+            self._settings_btn.set_badge(True)
+        bottom_layout.addWidget(self._settings_btn)
 
         bottom_layout.addWidget(hint_label)
         bottom_layout.addStretch()

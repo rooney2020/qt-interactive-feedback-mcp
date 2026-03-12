@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QTabBar, QPushButton, QMenu, QSystemTrayIcon,
 )
 from PySide6.QtCore import Qt, QTimer, QSettings
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor
 
 from feedback_ui import (
     GLOBAL_STYLE, FeedbackContentWidget, FeedbackResult,
@@ -28,7 +28,8 @@ from feedback_ui import (
 )
 from settings_dialog import (
     SettingsDialog, load_settings, check_version_async,
-    local_version, KEY_CHECK_UPDATE,
+    local_version, KEY_CHECK_UPDATE, BadgePushButton,
+    set_update_flag, has_update_flag,
 )
 
 SOCKET_PATH = os.path.join("/tmp", "mcp_feedback_daemon.sock")
@@ -150,6 +151,19 @@ def _socket_server():
             break
 
 
+def _icon_with_badge(base_icon: QIcon, size: int = 64) -> QIcon:
+    """Return a copy of base_icon with a red dot badge at top-right."""
+    pixmap = base_icon.pixmap(size, size)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    r = size // 4
+    painter.setBrush(QColor("#e53935"))
+    painter.setPen(QColor("#ff6b6b"))
+    painter.drawEllipse(size - r - 1, 1, r, r)
+    painter.end()
+    return QIcon(pixmap)
+
+
 class DaemonWindow(QMainWindow):
     """Single-window multi-tab feedback UI."""
 
@@ -178,16 +192,17 @@ class DaemonWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         # Tab bar corner: settings button
-        corner_btn = QPushButton("⚙")
-        corner_btn.setFixedSize(28, 28)
-        corner_btn.setToolTip("设置")
-        corner_btn.setStyleSheet(
+        self._corner_btn = BadgePushButton("⚙")
+        self._corner_btn.setFixedSize(28, 28)
+        self._corner_btn.setToolTip("设置")
+        self._corner_btn_style_normal = (
             f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
             f"border: none; font-size: 16px; padding: 0; }}"
             f"QPushButton:hover {{ color: {TEXT_PRIMARY}; }}"
         )
-        corner_btn.clicked.connect(self._open_settings)
-        self.tabs.setCornerWidget(corner_btn, Qt.TopRightCorner)
+        self._corner_btn.setStyleSheet(self._corner_btn_style_normal)
+        self._corner_btn.clicked.connect(self._open_settings)
+        self.tabs.setCornerWidget(self._corner_btn, Qt.TopRightCorner)
 
         self._session_tabs: Dict[str, FeedbackContentWidget] = {}
 
@@ -203,11 +218,14 @@ class DaemonWindow(QMainWindow):
 
         # System tray icon
         self._tray = None
+        self._has_update = False
         self._setup_tray(icon_path)
 
         # Check for updates on startup
         self._ver_sig = None
-        if load_settings().get(KEY_CHECK_UPDATE, True):
+        check_enabled = load_settings().get(KEY_CHECK_UPDATE, True)
+        _log(f"Startup version check: enabled={check_enabled}")
+        if check_enabled:
             self._ver_sig = check_version_async(self._on_startup_version_check)
 
     def _poll_requests(self):
@@ -335,8 +353,8 @@ class DaemonWindow(QMainWindow):
             _log("System tray not available, skipping tray icon")
             return
         self._tray = QSystemTrayIcon(self)
-        if icon_path and os.path.exists(icon_path):
-            self._tray.setIcon(QIcon(icon_path))
+        self._tray_base_icon = QIcon(icon_path) if icon_path and os.path.exists(icon_path) else QIcon()
+        self._tray.setIcon(self._tray_base_icon)
         self._tray.setToolTip(f"MCP 反馈助手 v{local_version()}")
         self._tray.activated.connect(self._on_tray_activated)
 
@@ -374,19 +392,35 @@ class DaemonWindow(QMainWindow):
         self.raise_()
 
     def _open_settings(self):
-        dlg = SettingsDialog(self)
+        dlg = SettingsDialog(self, has_update=self._has_update)
         dlg.exec()
 
     def _on_startup_version_check(self, remote_ver: str, error: str):
-        if error or not remote_ver:
+        if error:
+            _log(f"Version check failed: {error}")
             return
-        if remote_ver != local_version() and self._tray:
-            self._tray.showMessage(
-                "MCP 反馈助手",
-                f"有新版本 {remote_ver}（当前 {local_version()}）",
-                QSystemTrayIcon.MessageIcon.Information,
-                5000,
-            )
+        if not remote_ver:
+            _log("Version check returned empty")
+            return
+        local_v = local_version()
+        _log(f"Version check: local={local_v}, remote={remote_ver}")
+        if remote_ver != local_v:
+            self._has_update = True
+            set_update_flag(True)
+            update_msg = f"有新版本 {remote_ver}（当前 {local_v}）"
+            self.setWindowTitle(f"MCP 反馈助手 ⬆️ {update_msg}")
+            # Red badge on tray icon
+            if self._tray and hasattr(self, '_tray_base_icon'):
+                self._tray.setIcon(_icon_with_badge(self._tray_base_icon))
+                self._tray.setToolTip(f"MCP 反馈助手 - {update_msg}")
+                self._tray.showMessage("MCP 反馈助手", update_msg,
+                    QSystemTrayIcon.MessageIcon.Information, 8000)
+            # Red badge on corner settings button and window icon
+            self._corner_btn.set_badge(True)
+            self._corner_btn.setToolTip(f"设置 - {update_msg}")
+            if hasattr(self, '_tray_base_icon'):
+                self.setWindowIcon(_icon_with_badge(self._tray_base_icon, 256))
+            _log(f"Version update notification sent")
 
     def _watchdog_check(self):
         """Restart poll timer if it appears stuck."""

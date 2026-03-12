@@ -1,14 +1,18 @@
 """Settings dialog and version checker for MCP Feedback Assistant."""
 import os
+import sys
+import json
+import subprocess
 import threading
 import urllib.request
 import urllib.error
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QCheckBox, QGroupBox, QFrame, QTextEdit,
+    QCheckBox, QGroupBox, QFrame, QTextEdit, QSpinBox,
 )
 from PySide6.QtCore import Qt, QSettings, Signal, QObject
+from PySide6.QtGui import QPainter, QColor
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _VERSION_FILE = os.path.join(_SCRIPT_DIR, "VERSION")
@@ -58,6 +62,31 @@ def check_version_async(callback):
     return sig  # caller must keep reference to prevent GC
 
 
+# ── Badge Button ──────────────────────────────────────────────────────
+
+class BadgePushButton(QPushButton):
+    """QPushButton with optional red dot badge at top-right corner."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._show_badge = False
+
+    def set_badge(self, show: bool):
+        self._show_badge = show
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._show_badge:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(QColor("#e53935"))
+            painter.setPen(QColor("#ff6b6b"))
+            r = max(7, self.width() // 5)
+            painter.drawEllipse(self.width() - r - 1, 1, r, r)
+            painter.end()
+
+
 # ── Settings keys ──────────────────────────────────────────────────────
 
 SETTINGS_ORG = "InteractiveFeedbackMCP"
@@ -67,6 +96,10 @@ KEY_CHINESE_DEFAULT = "chinese_mode_default"
 KEY_REREAD_RULES_DEFAULT = "reread_rules_default"
 KEY_CHECK_UPDATE = "check_update_on_start"
 KEY_CUSTOM_SUFFIX = "custom_suffix_text"
+KEY_TIMEOUT_MINUTES = "timeout_minutes"
+KEY_HAS_UPDATE = "has_update"
+
+DEFAULT_TIMEOUT_MINUTES = 720  # 12 hours
 
 
 def load_settings() -> dict:
@@ -76,6 +109,7 @@ def load_settings() -> dict:
         KEY_REREAD_RULES_DEFAULT: s.value(KEY_REREAD_RULES_DEFAULT, False, type=bool),
         KEY_CHECK_UPDATE: s.value(KEY_CHECK_UPDATE, True, type=bool),
         KEY_CUSTOM_SUFFIX: s.value(KEY_CUSTOM_SUFFIX, "", type=str),
+        KEY_TIMEOUT_MINUTES: s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int),
     }
 
 
@@ -85,17 +119,74 @@ def save_settings(data: dict):
         s.setValue(k, v)
 
 
+def set_update_flag(has_update: bool):
+    s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    s.setValue(KEY_HAS_UPDATE, has_update)
+
+
+def has_update_flag() -> bool:
+    s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    return s.value(KEY_HAS_UPDATE, False, type=bool)
+
+
+def get_soft_timeout() -> int:
+    """Return SOFT_TIMEOUT in seconds from saved settings. Called by server.py.
+    Buffer = 5% of total, capped between 10s and 200s."""
+    s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    mins = s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int)
+    total_sec = mins * 60
+    buffer = max(10, min(200, int(total_sec * 0.05)))
+    return total_sec - buffer
+
+
+def _find_mcp_json_paths() -> list:
+    """Find all potential mcp.json paths (user-level and project-level)."""
+    paths = []
+    home = os.path.expanduser("~")
+    user_mcp = os.path.join(home, ".cursor", "mcp.json")
+    if os.path.isfile(user_mcp):
+        paths.append(user_mcp)
+    return paths
+
+
+def sync_mcp_json_timeout(timeout_minutes: int) -> list:
+    """Update timeout in all found mcp.json files. Returns list of (path, success, msg)."""
+    timeout_sec = timeout_minutes * 60
+    results = []
+    for path in _find_mcp_json_paths():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            servers = data.get("mcpServers", {})
+            updated = False
+            for name, cfg in servers.items():
+                if "interactive" in name.lower() and "feedback" in name.lower():
+                    cfg["timeout"] = timeout_sec
+                    updated = True
+            if updated:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.write("\n")
+                results.append((path, True, f"已更新 timeout={timeout_sec}"))
+            else:
+                results.append((path, False, "未找到 interactive-feedback server 配置"))
+        except Exception as e:
+            results.append((path, False, str(e)))
+    return results
+
+
 # ── Settings Dialog ────────────────────────────────────────────────────
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, has_update: bool = None):
         super().__init__(parent)
+        self._has_update = has_update if has_update is not None else has_update_flag()
         self.setWindowTitle("MCP 反馈助手 - 设置")
         self.setMinimumWidth(420)
         _check_svg = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
         self.setStyleSheet(f"""
             QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}
-            QCheckBox {{ spacing: 8px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 4px 0; }}
+            QCheckBox {{ spacing: 8px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 6px 0; margin-left: 12px; }}
             QCheckBox::indicator {{
                 width: 16px; height: 16px; border-radius: 3px;
                 border: 2px solid {DARK_BORDER}; background-color: {DARK_SURFACE};
@@ -145,17 +236,48 @@ class SettingsDialog(QDialog):
         lbl_defaults.setStyleSheet(_section_title_style)
         layout.addWidget(lbl_defaults)
 
-        frame_defaults = QFrame()
-        frame_defaults.setStyleSheet(_section_style)
-        gl = QVBoxLayout(frame_defaults)
-        gl.setContentsMargins(10, 8, 10, 8)
         self.cb_chinese = QCheckBox("使用中文（默认勾选）")
         self.cb_reread = QCheckBox("重新读取Rules（默认勾选）")
         self.cb_update = QCheckBox("启动时检查更新")
-        gl.addWidget(self.cb_chinese)
-        gl.addWidget(self.cb_reread)
-        gl.addWidget(self.cb_update)
-        layout.addWidget(frame_defaults)
+        layout.addWidget(self.cb_chinese)
+        layout.addWidget(self.cb_reread)
+        layout.addWidget(self.cb_update)
+
+        # Timeout setting
+        lbl_timeout = QLabel("超时时间")
+        lbl_timeout.setStyleSheet(_section_title_style)
+        layout.addWidget(lbl_timeout)
+
+        _spin_style = (
+            f"QSpinBox {{ background-color: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 4px 8px; font-size: 13px; }}"
+            f"QSpinBox::up-button, QSpinBox::down-button {{ width: 16px; }}"
+        )
+        timeout_row = QHBoxLayout()
+        timeout_row.setContentsMargins(12, 0, 0, 0)
+        timeout_row.addWidget(QLabel("单次调用最大等待："))
+        self.timeout_hours_spin = QSpinBox()
+        self.timeout_hours_spin.setRange(0, 48)
+        self.timeout_hours_spin.setSuffix(" 小时")
+        self.timeout_hours_spin.setStyleSheet(_spin_style)
+        timeout_row.addWidget(self.timeout_hours_spin)
+
+        self.timeout_mins_spin = QSpinBox()
+        self.timeout_mins_spin.setRange(0, 59)
+        self.timeout_mins_spin.setSuffix(" 分钟")
+        self.timeout_mins_spin.setStyleSheet(_spin_style)
+        timeout_row.addWidget(self.timeout_mins_spin)
+        timeout_row.addStretch()
+        layout.addLayout(timeout_row)
+
+        timeout_hint = QLabel("保存后自动同步 mcp.json，修改后需重启 Cursor 生效")
+        timeout_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
+        layout.addWidget(timeout_hint)
+
+        self._mcp_status_label = QLabel("")
+        self._mcp_status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        self._mcp_status_label.setVisible(False)
+        layout.addWidget(self._mcp_status_label)
 
         # Custom suffix
         lbl_suffix = QLabel("自定义追加文本")
@@ -163,24 +285,39 @@ class SettingsDialog(QDialog):
         layout.addWidget(lbl_suffix)
 
         hint = QLabel("每次提交反馈时自动追加的文本（留空则不追加）：")
-        hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
         layout.addWidget(hint)
         self.suffix_edit = QTextEdit()
         self.suffix_edit.setMaximumHeight(80)
         self.suffix_edit.setPlaceholderText("例如：请使用简洁的语言回复")
+        self.suffix_edit.setStyleSheet(
+            self.suffix_edit.styleSheet() if self.suffix_edit.styleSheet() else
+            f"QTextEdit {{ background-color: {DARK_SURFACE}; border: 1px solid {DARK_BORDER}; "
+            f"border-radius: 4px; padding: 6px; color: {TEXT_PRIMARY}; font-size: 12px; margin-left: 12px; }}"
+        )
         layout.addWidget(self.suffix_edit)
 
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        check_btn = QPushButton("检查更新")
-        check_btn.setStyleSheet(
+        self._check_btn_style_normal = (
             f"QPushButton {{ background: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
             f"border: 1px solid {DARK_BORDER}; }} QPushButton:hover {{ border-color: {ACCENT_BLUE}; }}"
         )
-        check_btn.clicked.connect(self._do_check_update)
-        btn_layout.addWidget(check_btn)
+        self._check_btn_style_update = (
+            f"QPushButton {{ background: #d84315; color: white; "
+            f"border: none; border-radius: 4px; }} QPushButton:hover {{ background: #e65100; }}"
+        )
+        if self._has_update:
+            self._check_btn = BadgePushButton("立即更新")
+            self._check_btn.setStyleSheet(self._check_btn_style_update)
+            self._check_btn.clicked.connect(self._do_update)
+        else:
+            self._check_btn = BadgePushButton("检查更新")
+            self._check_btn.setStyleSheet(self._check_btn_style_normal)
+            self._check_btn.clicked.connect(self._do_check_update)
+        btn_layout.addWidget(self._check_btn)
 
         save_btn = QPushButton("保存")
         save_btn.clicked.connect(self._save_and_close)
@@ -195,14 +332,38 @@ class SettingsDialog(QDialog):
         self.cb_reread.setChecked(data[KEY_REREAD_RULES_DEFAULT])
         self.cb_update.setChecked(data[KEY_CHECK_UPDATE])
         self.suffix_edit.setPlainText(data[KEY_CUSTOM_SUFFIX])
+        total_mins = data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES)
+        self.timeout_hours_spin.setValue(total_mins // 60)
+        self.timeout_mins_spin.setValue(total_mins % 60)
+        if self._has_update:
+            self._check_btn.set_badge(True)
 
     def _save_and_close(self):
+        total_mins = self.timeout_hours_spin.value() * 60 + self.timeout_mins_spin.value()
+        if total_mins < 1:
+            total_mins = 1
         save_settings({
             KEY_CHINESE_DEFAULT: self.cb_chinese.isChecked(),
             KEY_REREAD_RULES_DEFAULT: self.cb_reread.isChecked(),
             KEY_CHECK_UPDATE: self.cb_update.isChecked(),
             KEY_CUSTOM_SUFFIX: self.suffix_edit.toPlainText().strip(),
+            KEY_TIMEOUT_MINUTES: total_mins,
         })
+        results = sync_mcp_json_timeout(total_mins)
+        if results:
+            msgs = []
+            for path, ok, msg in results:
+                short_path = path.replace(os.path.expanduser("~"), "~")
+                msgs.append(f"{'✅' if ok else '⚠️'} {short_path}: {msg}")
+            self._mcp_status_label.setText("\n".join(msgs) + "\n⚠️ 修改 mcp.json 后需重启 Cursor 生效")
+            self._mcp_status_label.setStyleSheet(f"color: #f0a050; font-size: 11px;")
+            self._mcp_status_label.setVisible(True)
+        else:
+            self._mcp_status_label.setText("⚠️ 未找到 ~/.cursor/mcp.json，请手动配置 timeout")
+            self._mcp_status_label.setStyleSheet(f"color: #f0a050; font-size: 11px;")
+            self._mcp_status_label.setVisible(True)
+            self.accept()
+            return
         self.accept()
 
     def _do_check_update(self):
@@ -219,9 +380,49 @@ class SettingsDialog(QDialog):
             self._update_label.setText(f"✅ 已是最新版本 ({remote_ver})")
             self._update_label.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
         else:
-            self._update_label.setText(
-                f"🔄 有新版本: {remote_ver}（当前: {local_version()}）\n"
-                f"运行 cd {_SCRIPT_DIR} && git pull 更新"
-            )
+            set_update_flag(True)
+            self._has_update = True
+            self._update_label.setText(f"🔄 有新版本: {remote_ver}（当前: {local_version()}）")
             self._update_label.setStyleSheet(f"color: #f0a050; font-size: 12px;")
+            self._check_btn.setText("立即更新")
+            self._check_btn.setStyleSheet(self._check_btn_style_update)
+            self._check_btn.set_badge(True)
+            try:
+                self._check_btn.clicked.disconnect()
+            except RuntimeError:
+                pass
+            self._check_btn.clicked.connect(self._do_update)
         self._update_label.setVisible(True)
+
+    def _do_update(self):
+        self._update_label.setText("正在更新...")
+        self._update_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+        self._update_label.setVisible(True)
+        self._check_btn.setEnabled(False)
+        try:
+            result = subprocess.run(
+                ["git", "pull"], cwd=_SCRIPT_DIR,
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                set_update_flag(False)
+                self._update_label.setText(f"✅ 更新成功，正在重启...\n{result.stdout.strip()}")
+                self._update_label.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(1500, self._restart_daemon)
+            else:
+                self._update_label.setText(f"⚠️ 更新失败:\n{result.stderr.strip()}")
+                self._update_label.setStyleSheet("color: #ff6b8a; font-size: 12px;")
+                self._check_btn.setEnabled(True)
+        except Exception as e:
+            self._update_label.setText(f"⚠️ 更新异常: {e}")
+            self._update_label.setStyleSheet("color: #ff6b8a; font-size: 12px;")
+            self._check_btn.setEnabled(True)
+
+    def _restart_daemon(self):
+        python = sys.executable
+        daemon_script = os.path.join(_SCRIPT_DIR, "feedback_daemon.py")
+        if os.path.exists(daemon_script):
+            subprocess.Popen([python, daemon_script], start_new_session=True)
+        from PySide6.QtWidgets import QApplication
+        QApplication.quit()
