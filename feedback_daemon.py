@@ -355,7 +355,7 @@ class DaemonWindow(QMainWindow):
         self._tray = QSystemTrayIcon(self)
         self._tray_base_icon = QIcon(icon_path) if icon_path and os.path.exists(icon_path) else QIcon()
         self._tray.setIcon(self._tray_base_icon)
-        self._tray.setToolTip(f"MCP 反馈助手 v{local_version()}")
+        self._tray.setToolTip(f"MCP 反馈助手v1.4.1 v{local_version()}")
         self._tray.activated.connect(self._on_tray_activated)
 
         menu = QMenu()
