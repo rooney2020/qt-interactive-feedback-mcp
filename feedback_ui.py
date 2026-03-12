@@ -45,6 +45,8 @@ BTN_CANCEL_HOVER = "#ff8da6"
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CHECK_ICON = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
+_CLOSE_ICON = os.path.join(_SCRIPT_DIR, "images", "close.svg").replace("\\", "/")
+_CLOSE_HOVER_ICON = os.path.join(_SCRIPT_DIR, "images", "close-hover.svg").replace("\\", "/")
 
 GLOBAL_STYLE = f"""
 QMainWindow {{
@@ -138,9 +140,13 @@ QTabBar::tab:hover {{
     color: {TEXT_PRIMARY};
 }}
 QTabBar::close-button {{
-    image: none;
+    image: url({_CLOSE_ICON});
     subcontrol-position: right;
-    padding: 2px;
+    border: none;
+    padding: 3px;
+}}
+QTabBar::close-button:hover {{
+    image: url({_CLOSE_HOVER_ICON});
 }}
 """
 
