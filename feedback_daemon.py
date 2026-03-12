@@ -169,7 +169,7 @@ class DaemonWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MCP \u53cd\u9988\u52a9\u624b v1.4.2")
+        self.setWindowTitle("MCP \u53cd\u9988\u52a9\u624b")
         # Normal window level, not always-on-top
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -408,7 +408,7 @@ class DaemonWindow(QMainWindow):
             self._has_update = True
             set_update_flag(True)
             update_msg = f"有新版本 {remote_ver}（当前 {local_v}）"
-            self.setWindowTitle(f"MCP 反馈助手 v1.4.2 ⬆️ {update_msg}")
+            self.setWindowTitle(f"MCP 反馈助手 ⬆️ {update_msg}")
             # Red badge on tray icon
             if self._tray and hasattr(self, '_tray_base_icon'):
                 self._tray.setIcon(_icon_with_badge(self._tray_base_icon))
