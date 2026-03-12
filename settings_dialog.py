@@ -395,37 +395,132 @@ class SettingsDialog(QDialog):
         self._update_label.setVisible(True)
 
     def _do_update(self):
-        self._update_label.setText("正在更新...")
-        self._update_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-        self._update_label.setVisible(True)
-        self._check_btn.setEnabled(False)
+        dlg = UpdateDialog(self)
+        dlg.exec()
+
+    def _restart_daemon(self):
+        python = sys.executable
+        daemon_script = os.path.join(_SCRIPT_DIR, "feedback_daemon.py")
+        if os.path.exists(daemon_script):
+            subprocess.Popen([python, daemon_script], start_new_session=True)
+        from PySide6.QtWidgets import QApplication
+        QApplication.quit()
+
+
+class _UpdateSignal(QObject):
+    log = Signal(str)
+    finished = Signal(bool, str)  # (success, summary)
+
+
+class UpdateDialog(QDialog):
+    """Separate dialog for update progress."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("更新 MCP 反馈助手")
+        self.setMinimumSize(480, 300)
+        self.setStyleSheet(f"""
+            QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}
+            QPushButton {{
+                background: {ACCENT_BLUE}; color: white; border: none;
+                border-radius: 4px; padding: 8px 24px; font-size: 13px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: #5ab0ff; }}
+            QPushButton:disabled {{ background: #444466; color: #888888; }}
+        """)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel("正在更新...")
+        title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {ACCENT_BLUE};")
+        layout.addWidget(title)
+        self._title = title
+
+        self._log = QTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setStyleSheet(
+            f"QTextEdit {{ background-color: #0d0d18; border: 1px solid {DARK_BORDER}; "
+            f"border-radius: 4px; padding: 8px; color: {ACCENT_GREEN}; "
+            f"font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; }}"
+        )
+        layout.addWidget(self._log)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self._restart_btn = QPushButton("立即重启")
+        self._restart_btn.setVisible(False)
+        self._restart_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT_GREEN}; color: white; "
+            f"border: none; border-radius: 4px; padding: 8px 24px; font-size: 13px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: #6ab86a; }}"
+        )
+        self._restart_btn.clicked.connect(self._do_restart)
+        btn_row.addWidget(self._restart_btn)
+
+        self._close_btn = QPushButton("关闭")
+        self._close_btn.setVisible(False)
+        self._close_btn.setStyleSheet(
+            f"QPushButton {{ background: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT_BLUE}; }}"
+        )
+        self._close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._close_btn)
+        layout.addLayout(btn_row)
+
+        self._sig = _UpdateSignal()
+        self._sig.log.connect(self._append_log)
+        self._sig.finished.connect(self._on_finished)
+
+        t = threading.Thread(target=self._run_update, daemon=True)
+        t.start()
+
+    def _append_log(self, text: str):
+        self._log.append(text)
+
+    def _on_finished(self, success: bool, summary: str):
+        if success:
+            self._title.setText("✅ 更新成功")
+            self._title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {ACCENT_GREEN};")
+            self._restart_btn.setVisible(True)
+        else:
+            self._title.setText("⚠️ 更新失败")
+            self._title.setStyleSheet("font-size: 15px; font-weight: bold; color: #ff6b8a;")
+        self._close_btn.setVisible(True)
+
+    def _run_update(self):
         try:
-            # Find remote name (may not be 'origin')
+            self._sig.log.emit("正在检测 git remote...")
             remote_result = subprocess.run(
                 ["git", "remote"], cwd=_SCRIPT_DIR,
                 capture_output=True, text=True, timeout=5,
             )
             remote = remote_result.stdout.strip().split('\n')[0] if remote_result.returncode == 0 else "origin"
+
+            cmd = f"git pull {remote} main"
+            self._sig.log.emit(f"\n$ {cmd}\n")
+
             result = subprocess.run(
                 ["git", "pull", remote, "main"], cwd=_SCRIPT_DIR,
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=60,
             )
+            if result.stdout.strip():
+                self._sig.log.emit(result.stdout.strip())
+            if result.stderr.strip():
+                self._sig.log.emit(result.stderr.strip())
+
             if result.returncode == 0:
                 set_update_flag(False)
-                self._update_label.setText(f"✅ 更新成功，正在重启...\n{result.stdout.strip()}")
-                self._update_label.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(1500, self._restart_daemon)
+                self._sig.log.emit("\n✅ 更新完成，点击「立即重启」应用更新")
+                self._sig.finished.emit(True, "")
             else:
-                self._update_label.setText(f"⚠️ 更新失败:\n{result.stderr.strip()}")
-                self._update_label.setStyleSheet("color: #ff6b8a; font-size: 12px;")
-                self._check_btn.setEnabled(True)
+                self._sig.log.emit(f"\n⚠️ git 返回码: {result.returncode}")
+                self._sig.finished.emit(False, "")
         except Exception as e:
-            self._update_label.setText(f"⚠️ 更新异常: {e}")
-            self._update_label.setStyleSheet("color: #ff6b8a; font-size: 12px;")
-            self._check_btn.setEnabled(True)
+            self._sig.log.emit(f"\n⚠️ 异常: {e}")
+            self._sig.finished.emit(False, str(e))
 
-    def _restart_daemon(self):
+    def _do_restart(self):
         python = sys.executable
         daemon_script = os.path.join(_SCRIPT_DIR, "feedback_daemon.py")
         if os.path.exists(daemon_script):
