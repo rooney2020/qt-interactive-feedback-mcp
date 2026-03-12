@@ -17,6 +17,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QSettings, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage
 
+from settings_dialog import (
+    SettingsDialog, load_settings, KEY_CHINESE_DEFAULT,
+    KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX,
+)
+
 
 class FeedbackResult(TypedDict):
     interactive_feedback: str
@@ -376,15 +381,28 @@ class FeedbackContentWidget(QWidget):
             f"QCheckBox::indicator:hover {{ border-color: {ACCENT_BLUE}; }}"
         )
 
+        user_prefs = load_settings()
+
         self.reread_rules_cb = ClickableCheckBox("重新读取Rules")
-        self.reread_rules_cb.setChecked(False)
+        self.reread_rules_cb.setChecked(user_prefs.get(KEY_REREAD_RULES_DEFAULT, False))
         self.reread_rules_cb.setStyleSheet(_mini_cb_style)
         bottom_layout.addWidget(self.reread_rules_cb)
 
         self.chinese_mode_cb = ClickableCheckBox("使用中文")
-        self.chinese_mode_cb.setChecked(True)
+        self.chinese_mode_cb.setChecked(user_prefs.get(KEY_CHINESE_DEFAULT, True))
         self.chinese_mode_cb.setStyleSheet(_mini_cb_style)
         bottom_layout.addWidget(self.chinese_mode_cb)
+
+        settings_btn = QPushButton("⚙")
+        settings_btn.setFixedSize(32, 32)
+        settings_btn.setToolTip("设置")
+        settings_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; font-size: 16px; padding: 0; }}"
+            f"QPushButton:hover {{ background: rgba(255,255,255,0.05); color: {TEXT_PRIMARY}; border-color: {ACCENT_BLUE}; }}"
+        )
+        settings_btn.clicked.connect(self._open_settings)
+        bottom_layout.addWidget(settings_btn)
 
         self.submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
         self.submit_btn.setMinimumWidth(120)
@@ -461,6 +479,13 @@ class FeedbackContentWidget(QWidget):
         buffer.close()
         return byte_array.toBase64().data().decode('ascii')
 
+    def _open_settings(self):
+        dlg = SettingsDialog(self)
+        if dlg.exec():
+            prefs = load_settings()
+            self.chinese_mode_cb.setChecked(prefs.get(KEY_CHINESE_DEFAULT, True))
+            self.reread_rules_cb.setChecked(prefs.get(KEY_REREAD_RULES_DEFAULT, False))
+
     def _has_content(self) -> bool:
         if self.feedback_text.toPlainText().strip():
             return True
@@ -498,6 +523,9 @@ class FeedbackContentWidget(QWidget):
             suffixes.append("重新读取Rules")
         if self.chinese_mode_cb.isChecked():
             suffixes.append("必须完全使用中文（简体）回复和思考")
+        custom = load_settings().get(KEY_CUSTOM_SUFFIX, "")
+        if custom:
+            suffixes.append(custom)
         if suffixes:
             final_feedback += "\n\n" + "\n\n".join(suffixes)
 

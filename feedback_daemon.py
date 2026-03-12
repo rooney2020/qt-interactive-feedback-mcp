@@ -16,13 +16,19 @@ import fcntl
 import subprocess
 from typing import Dict, Optional
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget, QTabBar
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QTabWidget, QTabBar, QPushButton, QMenu, QSystemTrayIcon,
+)
 from PySide6.QtCore import Qt, QTimer, QSettings
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QAction
 
 from feedback_ui import (
     GLOBAL_STYLE, FeedbackContentWidget, FeedbackResult,
-    DARK_BG, DARK_BORDER, ACCENT_BLUE, TEXT_SECONDARY,
+    DARK_BG, DARK_BORDER, ACCENT_BLUE, TEXT_SECONDARY, TEXT_PRIMARY,
+)
+from settings_dialog import (
+    SettingsDialog, load_settings, check_version_async,
+    local_version, KEY_CHECK_UPDATE,
 )
 
 SOCKET_PATH = os.path.join("/tmp", "mcp_feedback_daemon.sock")
@@ -171,6 +177,18 @@ class DaemonWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self.setCentralWidget(self.tabs)
 
+        # Tab bar corner: settings button
+        corner_btn = QPushButton("⚙")
+        corner_btn.setFixedSize(28, 28)
+        corner_btn.setToolTip("设置")
+        corner_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
+            f"border: none; font-size: 16px; padding: 0; }}"
+            f"QPushButton:hover {{ color: {TEXT_PRIMARY}; }}"
+        )
+        corner_btn.clicked.connect(self._open_settings)
+        self.tabs.setCornerWidget(corner_btn, Qt.TopRightCorner)
+
         self._session_tabs: Dict[str, FeedbackContentWidget] = {}
 
         self._poll_timer = QTimer(self)
@@ -182,6 +200,15 @@ class DaemonWindow(QMainWindow):
         self._watchdog_timer = QTimer(self)
         self._watchdog_timer.timeout.connect(self._watchdog_check)
         self._watchdog_timer.start(60000)  # every 60s
+
+        # System tray icon
+        self._tray = None
+        self._setup_tray(icon_path)
+
+        # Check for updates on startup
+        self._ver_sig = None
+        if load_settings().get(KEY_CHECK_UPDATE, True):
+            self._ver_sig = check_version_async(self._on_startup_version_check)
 
     def _poll_requests(self):
         """Check for new requests and close requests from the socket server thread."""
@@ -302,6 +329,64 @@ class DaemonWindow(QMainWindow):
                 self.hide()
         except Exception as e:
             _log(f"ERROR in _on_tab_close_requested index={index}: {e}")
+
+    def _setup_tray(self, icon_path: str):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            _log("System tray not available, skipping tray icon")
+            return
+        self._tray = QSystemTrayIcon(self)
+        if icon_path and os.path.exists(icon_path):
+            self._tray.setIcon(QIcon(icon_path))
+        self._tray.setToolTip(f"MCP 反馈助手 v{local_version()}")
+        self._tray.activated.connect(self._on_tray_activated)
+
+        menu = QMenu()
+        menu.setStyleSheet(
+            f"QMenu {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; border: 1px solid {DARK_BORDER}; }}"
+            f"QMenu::item:selected {{ background-color: {ACCENT_BLUE}; }}"
+        )
+        show_action = QAction("显示窗口", self)
+        show_action.triggered.connect(self._show_window)
+        menu.addAction(show_action)
+
+        settings_action = QAction("设置", self)
+        settings_action.triggered.connect(self._open_settings)
+        menu.addAction(settings_action)
+
+        menu.addSeparator()
+
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(QApplication.quit)
+        menu.addAction(quit_action)
+
+        self._tray.setContextMenu(menu)
+        self._tray.show()
+        _log("System tray icon created")
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._show_window()
+
+    def _show_window(self):
+        self.setVisible(True)
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self)
+        dlg.exec()
+
+    def _on_startup_version_check(self, remote_ver: str, error: str):
+        if error or not remote_ver:
+            return
+        if remote_ver != local_version() and self._tray:
+            self._tray.showMessage(
+                "MCP 反馈助手",
+                f"有新版本 {remote_ver}（当前 {local_version()}）",
+                QSystemTrayIcon.MessageIcon.Information,
+                5000,
+            )
 
     def _watchdog_check(self):
         """Restart poll timer if it appears stuck."""
