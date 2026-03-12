@@ -186,7 +186,8 @@ class SettingsDialog(QDialog):
         _check_svg = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
         self.setStyleSheet(f"""
             QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}
-            QCheckBox {{ spacing: 10px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 8px 4px; margin-left: 12px; }}
+            QCheckBox {{ spacing: 10px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 3px 4px; margin-left: 12px; background: transparent; border: none; }}
+            QCheckBox:checked {{ background: transparent; }}
             QCheckBox::indicator {{
                 width: 16px; height: 16px; border-radius: 3px;
                 border: 2px solid {DARK_BORDER}; background-color: {DARK_SURFACE};
