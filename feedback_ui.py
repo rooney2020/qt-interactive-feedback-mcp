@@ -364,9 +364,7 @@ class FeedbackContentWidget(QWidget):
         bottom_layout.addWidget(hint_label)
         bottom_layout.addStretch()
 
-        self.chinese_mode_cb = ClickableCheckBox("使用中文")
-        self.chinese_mode_cb.setChecked(True)
-        self.chinese_mode_cb.setStyleSheet(
+        _mini_cb_style = (
             f"QCheckBox {{ spacing: 6px; font-size: 12px; padding: 4px 8px; "
             f"border: 1px solid {DARK_BORDER}; border-radius: 4px; "
             f"background-color: {DARK_SURFACE}; }}"
@@ -377,6 +375,15 @@ class FeedbackContentWidget(QWidget):
             f"QCheckBox::indicator:checked {{ border-color: {ACCENT_BLUE}; background-color: {DARK_SURFACE}; image: url({_CHECK_ICON}); }}"
             f"QCheckBox::indicator:hover {{ border-color: {ACCENT_BLUE}; }}"
         )
+
+        self.reread_rules_cb = ClickableCheckBox("重新读取Rules")
+        self.reread_rules_cb.setChecked(False)
+        self.reread_rules_cb.setStyleSheet(_mini_cb_style)
+        bottom_layout.addWidget(self.reread_rules_cb)
+
+        self.chinese_mode_cb = ClickableCheckBox("使用中文")
+        self.chinese_mode_cb.setChecked(True)
+        self.chinese_mode_cb.setStyleSheet(_mini_cb_style)
         bottom_layout.addWidget(self.chinese_mode_cb)
 
         self.submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
@@ -486,8 +493,13 @@ class FeedbackContentWidget(QWidget):
 
         final_feedback = "\n\n".join(final_feedback_parts)
 
+        suffixes = []
+        if self.reread_rules_cb.isChecked():
+            suffixes.append("重新读取Rules")
         if self.chinese_mode_cb.isChecked():
-            final_feedback += "\n\n必须完全使用中文（简体）回复和思考"
+            suffixes.append("必须完全使用中文（简体）回复和思考")
+        if suffixes:
+            final_feedback += "\n\n" + "\n\n".join(suffixes)
 
         images_b64 = [self._pixmap_to_base64(p) for p in self.screenshots]
 
