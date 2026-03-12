@@ -186,7 +186,7 @@ class SettingsDialog(QDialog):
         _check_svg = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
         self.setStyleSheet(f"""
             QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}
-            QCheckBox {{ spacing: 8px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 6px 0; margin-left: 12px; }}
+            QCheckBox {{ spacing: 10px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 8px 4px; margin-left: 12px; }}
             QCheckBox::indicator {{
                 width: 16px; height: 16px; border-radius: 3px;
                 border: 2px solid {DARK_BORDER}; background-color: {DARK_SURFACE};
@@ -400,8 +400,14 @@ class SettingsDialog(QDialog):
         self._update_label.setVisible(True)
         self._check_btn.setEnabled(False)
         try:
+            # Find remote name (may not be 'origin')
+            remote_result = subprocess.run(
+                ["git", "remote"], cwd=_SCRIPT_DIR,
+                capture_output=True, text=True, timeout=5,
+            )
+            remote = remote_result.stdout.strip().split('\n')[0] if remote_result.returncode == 0 else "origin"
             result = subprocess.run(
-                ["git", "pull"], cwd=_SCRIPT_DIR,
+                ["git", "pull", remote, "main"], cwd=_SCRIPT_DIR,
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode == 0:
