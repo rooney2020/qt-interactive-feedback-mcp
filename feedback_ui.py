@@ -37,6 +37,9 @@ BTN_CANCEL_BG = "#ff6b8a"
 BTN_CANCEL_HOVER = "#ff8da6"
 
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_CHECK_ICON = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
+
 GLOBAL_STYLE = f"""
 QMainWindow {{
     background-color: {DARK_BG};
@@ -96,9 +99,9 @@ QCheckBox::indicator {{
     background-color: {DARK_SURFACE};
 }}
 QCheckBox::indicator:checked {{
-    background-color: {ACCENT_BLUE};
     border-color: {ACCENT_BLUE};
-    image: none;
+    background-color: {DARK_SURFACE};
+    image: url({_CHECK_ICON});
 }}
 QCheckBox::indicator:hover {{
     border-color: {ACCENT_BLUE};
@@ -134,6 +137,12 @@ QTabBar::close-button {{
     padding: 2px;
 }}
 """
+
+
+class ClickableCheckBox(QCheckBox):
+    """QCheckBox that toggles on click anywhere within its bounding rect."""
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
 
 
 class FeedbackTextEdit(QTextEdit):
@@ -300,7 +309,7 @@ class FeedbackContentWidget(QWidget):
             options_layout.setContentsMargins(10, 8, 10, 8)
             options_layout.setSpacing(4)
             for option in self.predefined_options:
-                checkbox = QCheckBox(option)
+                checkbox = ClickableCheckBox(option)
                 self.option_checkboxes.append(checkbox)
                 options_layout.addWidget(checkbox)
             main_layout.addWidget(options_container)
@@ -354,6 +363,21 @@ class FeedbackContentWidget(QWidget):
         bottom_layout = QHBoxLayout()
         bottom_layout.addWidget(hint_label)
         bottom_layout.addStretch()
+
+        self.chinese_mode_cb = ClickableCheckBox("使用中文")
+        self.chinese_mode_cb.setChecked(True)
+        self.chinese_mode_cb.setStyleSheet(
+            f"QCheckBox {{ spacing: 6px; font-size: 12px; padding: 4px 8px; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; "
+            f"background-color: {DARK_SURFACE}; }}"
+            f"QCheckBox:hover {{ background-color: #333350; border-color: {ACCENT_BLUE}; }}"
+            f"QCheckBox:checked {{ background-color: rgba(74, 158, 255, 0.15); border-color: {ACCENT_BLUE}; }}"
+            f"QCheckBox::indicator {{ width: 14px; height: 14px; border-radius: 3px; "
+            f"border: 2px solid {DARK_BORDER}; background-color: {DARK_SURFACE}; }}"
+            f"QCheckBox::indicator:checked {{ border-color: {ACCENT_BLUE}; background-color: {DARK_SURFACE}; image: url({_CHECK_ICON}); }}"
+            f"QCheckBox::indicator:hover {{ border-color: {ACCENT_BLUE}; }}"
+        )
+        bottom_layout.addWidget(self.chinese_mode_cb)
 
         self.submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
         self.submit_btn.setMinimumWidth(120)
@@ -461,6 +485,10 @@ class FeedbackContentWidget(QWidget):
             final_feedback_parts.append(feedback_text)
 
         final_feedback = "\n\n".join(final_feedback_parts)
+
+        if self.chinese_mode_cb.isChecked():
+            final_feedback += "\n\n必须完全使用中文（简体）回复和思考"
+
         images_b64 = [self._pixmap_to_base64(p) for p in self.screenshots]
 
         result = FeedbackResult(

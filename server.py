@@ -25,7 +25,17 @@ mcp = FastMCP("Interactive Feedback MCP")
 POLL_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
-SOFT_TIMEOUT = 3500  # seconds (~58 min); return heartbeat before Cursor's hard timeout
+SOFT_TIMEOUT = 43000  # seconds (~11.9h); return heartbeat before Cursor's hard timeout (43200s)
+
+def _adaptive_heartbeat_interval(elapsed: float) -> float:
+    """Return heartbeat interval based on how long we've been waiting.
+    Reduces notification frequency for long waits to avoid message accumulation."""
+    if elapsed < 600:       # 0~10 min
+        return 10
+    elif elapsed < 3600:    # 10 min ~ 1 hour
+        return 60
+    else:                   # 1 hour+
+        return 300
 
 _SERVER_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_server.log")
 _SESSION_LOG_PATH = os.path.join(tempfile.gettempdir(), "mcp_feedback_sessions.log")
@@ -202,12 +212,13 @@ async def _send_to_daemon(
                 writer.close()
                 return {"interactive_feedback": "[心跳]", "images": []}, elapsed, session_id
 
-            if ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
+            hb_interval = _adaptive_heartbeat_interval(elapsed)
+            if ctx and (elapsed - last_heartbeat) >= hb_interval:
                 last_heartbeat = elapsed
                 try:
                     await ctx.report_progress(
                         progress=elapsed,
-                        total=elapsed + 43200,
+                        total=elapsed + 86400,
                     )
                     await ctx.info(f"Waiting for user feedback... ({elapsed:.0f}s)")
                     heartbeat_failures = 0
@@ -280,10 +291,11 @@ async def _launch_feedback_standalone(
             while not wait_task.done():
                 await asyncio.sleep(POLL_INTERVAL)
                 elapsed += POLL_INTERVAL
-                if not wait_task.done() and ctx and (elapsed - last_heartbeat) >= HEARTBEAT_INTERVAL:
+                hb_interval = _adaptive_heartbeat_interval(elapsed)
+                if not wait_task.done() and ctx and (elapsed - last_heartbeat) >= hb_interval:
                     last_heartbeat = elapsed
                     try:
-                        await ctx.report_progress(progress=elapsed, total=elapsed + 43200)
+                        await ctx.report_progress(progress=elapsed, total=elapsed + 86400)
                         await ctx.info(f"Waiting for user feedback... ({elapsed}s)")
                         heartbeat_failures = 0
                     except Exception:
