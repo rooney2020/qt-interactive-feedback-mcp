@@ -26,9 +26,13 @@
 - 窗口启动时自动激活输入法（`fcitx-remote -o`）
 
 ### ⏱️ 心跳保活
-- 每 10 秒发送 progress notification 心跳
-- 最大等待 12 小时，适合长时间交互场景
+- 自适应 progress notification 心跳频率：0~10min 每 10s，10min~1h 每 60s，1h+ 每 5min
+- 单次调用最大等待 ~12 小时（SOFT_TIMEOUT = 43000s），需配合 `mcp.json` 中 `timeout: 43200`
 - 连续 3 次心跳失败自动关闭孤立窗口
+
+### 🌐 中文模式
+- 提交按钮旁内置「使用中文」勾选框（默认勾选）
+- 勾选时自动在反馈末尾追加中文语言提示，确保 AI 全程中文回复和思考
 
 ### 🪟 多 Agent 并行
 - 基于文件锁（`fcntl`）的全局窗口 ID 管理
@@ -89,7 +93,7 @@ echo "✅ fcitx4 Qt6 插件已安装"
         "run",
         "server.py"
       ],
-      "timeout": 3600,
+      "timeout": 43200,
       "autoApprove": [
         "interactive_feedback"
       ]
@@ -99,6 +103,18 @@ echo "✅ fcitx4 Qt6 插件已安装"
 ```
 
 > **将 `/path/to/interactive-feedback-mcp` 替换为实际路径。**
+>
+> **`timeout: 43200`**（12 小时，单位：秒）是必须的。工具的 SOFT_TIMEOUT（43000s）略小于此值，确保在 Cursor 硬超时前返回。如果 timeout 太小（如默认的 60s），Cursor 会在超时后强行取消 MCP 调用。
+
+#### Cursor 全局超时配置（推荐）
+
+在 Cursor `settings.json`（`Ctrl+Shift+P` → Open Settings (JSON)）中添加：
+
+```json
+"mcp.server.timeout": 43200000
+```
+
+> 单位为毫秒（43200000ms = 12h）。确保全局超时 ≥ per-server timeout。
 
 ### 2. Cursor Rules 配置
 
