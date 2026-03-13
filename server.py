@@ -27,12 +27,29 @@ HEARTBEAT_INTERVAL = 10
 MAX_HEARTBEAT_FAILURES = 3
 
 def _load_soft_timeout() -> int:
-    """Load SOFT_TIMEOUT from QSettings. Falls back to 43000s if unavailable."""
+    """Load SOFT_TIMEOUT from QSettings (auto_reply_seconds).
+    Falls back to 3000s to stay within Cursor's 3600s hard limit."""
     try:
         from settings_dialog import get_soft_timeout
         return get_soft_timeout()
     except Exception:
-        return 43000
+        return 3000
+
+def _load_auto_reply_seconds() -> int:
+    """Load auto-reply countdown seconds from settings."""
+    try:
+        from settings_dialog import get_auto_reply_seconds
+        return get_auto_reply_seconds()
+    except Exception:
+        return 3000
+
+def _load_auto_reply_message() -> str:
+    """Load auto-reply message from settings."""
+    try:
+        from settings_dialog import AUTO_REPLY_MESSAGE
+        return AUTO_REPLY_MESSAGE
+    except Exception:
+        return "请稍等, 我不在座位, 请立刻再次调用qt-interactive-feedback MCP与我交互, 刷新工具超时时间"
 
 SOFT_TIMEOUT = _load_soft_timeout()
 
@@ -200,12 +217,14 @@ async def _send_to_daemon(
 ) -> tuple[dict, float, str]:
     """Send a feedback request to the daemon and wait for the response.
     Returns (result_dict, elapsed_seconds, session_id)."""
+    countdown = _load_auto_reply_seconds()
     session_id = uuid.uuid4().hex[:12]
     request = {
         "session_id": session_id,
         "tab_title": tab_title or f"\u4f1a\u8bdd #{session_id[:6]}",
         "message": message,
         "predefined_options": predefined_options or [],
+        "countdown_seconds": countdown,
     }
 
     reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=16 * 1024 * 1024)
@@ -242,10 +261,11 @@ async def _send_to_daemon(
             elapsed += POLL_INTERVAL
 
             if elapsed >= SOFT_TIMEOUT:
-                _slog(f"[{session_id}] Soft timeout at {elapsed:.0f}s, returning heartbeat")
-                _session_log(session_id, elapsed, "heartbeat", "soft timeout, will reconnect")
+                auto_msg = _load_auto_reply_message()
+                _slog(f"[{session_id}] Soft timeout at {elapsed:.0f}s, auto-reply triggered")
+                _session_log(session_id, elapsed, "auto_reply", "countdown expired, auto-replying")
                 writer.close()
-                return {"interactive_feedback": "[心跳]", "images": []}, elapsed, session_id
+                return {"interactive_feedback": auto_msg, "images": []}, elapsed, session_id
 
             hb_interval = _adaptive_heartbeat_interval(elapsed)
             if ctx and (elapsed - last_heartbeat) >= hb_interval:
@@ -292,6 +312,8 @@ async def _launch_feedback_standalone(
     window_id: int = 1,
 ) -> dict:
     """Launch feedback_ui.py as a standalone subprocess."""
+    countdown = _load_auto_reply_seconds()
+
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         output_file = tmp.name
 
@@ -305,6 +327,7 @@ async def _launch_feedback_standalone(
             "--output-file", output_file,
             "--predefined-options", "|||".join(predefined_options) if predefined_options else "",
             "--window-id", str(window_id),
+            "--countdown", str(countdown),
         ]
         env = os.environ.copy()
         if sys.platform == "linux":

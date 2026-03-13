@@ -20,7 +20,8 @@ from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage
 from settings_dialog import (
     SettingsDialog, load_settings, KEY_CHINESE_DEFAULT,
     KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX, BadgePushButton,
-    has_update_flag,
+    has_update_flag, get_auto_reply_seconds, AUTO_REPLY_MESSAGE,
+    DEFAULT_AUTO_REPLY_SECONDS,
 )
 
 
@@ -272,17 +273,41 @@ class FeedbackContentWidget(QWidget):
     """Reusable feedback form widget - used both standalone and as tab content."""
     feedback_submitted = Signal(dict)
 
-    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None, parent=None):
+    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None,
+                 countdown_seconds: int = 0, parent=None):
         super().__init__(parent)
         self.prompt = prompt
         self.predefined_options = predefined_options or []
         self.screenshots: List[QPixmap] = []
+        self._countdown_total = countdown_seconds
+        self._countdown_remaining = countdown_seconds
         self._create_ui()
 
     def _create_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 8, 12, 8)
         main_layout.setSpacing(6)
+
+        # Countdown timer display
+        self._countdown_label = QLabel("")
+        self._countdown_label.setAlignment(Qt.AlignCenter)
+        self._countdown_label.setWordWrap(True)
+        self._countdown_label.setStyleSheet(
+            f"background-color: rgba(240, 160, 80, 0.15); "
+            f"border: 1px solid {ACCENT_ORANGE}; border-radius: 6px; "
+            f"padding: 8px 12px; color: {ACCENT_ORANGE}; font-size: 13px; font-weight: bold;"
+        )
+        if self._countdown_total > 0:
+            self._update_countdown_text()
+            self._countdown_label.setVisible(True)
+            self._countdown_timer = QTimer(self)
+            self._countdown_timer.setInterval(1000)
+            self._countdown_timer.timeout.connect(self._on_countdown_tick)
+            self._countdown_timer.start()
+        else:
+            self._countdown_label.setVisible(False)
+            self._countdown_timer = None
+        main_layout.addWidget(self._countdown_label)
 
         summary_title = QLabel("\U0001f916 AI \u5de5\u4f5c\u6458\u8981")
         summary_title.setStyleSheet(
@@ -545,13 +570,59 @@ class FeedbackContentWidget(QWidget):
             interactive_feedback=final_feedback,
             images=images_b64,
         )
+        self._stop_countdown()
+        self.feedback_submitted.emit(result)
+
+    def _update_countdown_text(self):
+        r = self._countdown_remaining
+        minutes, seconds = divmod(r, 60)
+        if minutes > 0:
+            time_str = f"{minutes} 分 {seconds} 秒"
+        else:
+            time_str = f"{seconds} 秒"
+        self._countdown_label.setText(
+            f"⏱️ 请在 {time_str} 内回复 | "
+            f"倒计时结束后会自动回复，您编辑的内容将消失，请注意保存"
+        )
+        if r <= 60:
+            self._countdown_label.setStyleSheet(
+                f"background-color: rgba(255, 107, 138, 0.2); "
+                f"border: 1px solid {BTN_CANCEL_BG}; border-radius: 6px; "
+                f"padding: 8px 12px; color: {BTN_CANCEL_BG}; font-size: 13px; font-weight: bold;"
+            )
+        elif r <= 300:
+            self._countdown_label.setStyleSheet(
+                f"background-color: rgba(240, 160, 80, 0.2); "
+                f"border: 1px solid {ACCENT_ORANGE}; border-radius: 6px; "
+                f"padding: 8px 12px; color: {ACCENT_ORANGE}; font-size: 13px; font-weight: bold;"
+            )
+
+    def _on_countdown_tick(self):
+        self._countdown_remaining -= 1
+        if self._countdown_remaining <= 0:
+            self._stop_countdown()
+            self._auto_submit_heartbeat()
+            return
+        self._update_countdown_text()
+
+    def _stop_countdown(self):
+        if self._countdown_timer and self._countdown_timer.isActive():
+            self._countdown_timer.stop()
+
+    def _auto_submit_heartbeat(self):
+        """Auto-submit the preset heartbeat message when countdown reaches 0."""
+        result = FeedbackResult(
+            interactive_feedback=AUTO_REPLY_MESSAGE,
+            images=[],
+        )
         self.feedback_submitted.emit(result)
 
 
 class FeedbackUI(QMainWindow):
     """Standalone feedback window (legacy mode / fallback)."""
 
-    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None, window_id: str = "0"):
+    def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None,
+                 window_id: str = "0", countdown_seconds: int = 0):
         super().__init__()
         self.feedback_result = None
 
@@ -563,7 +634,6 @@ class FeedbackUI(QMainWindow):
         icon_path = os.path.join(script_dir, "images", "feedback.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
-        # Normal window level, not always-on-top
 
         self.settings = QSettings("InteractiveFeedbackMCP", "InteractiveFeedbackMCP")
         self.settings.beginGroup("MainWindow_General")
@@ -581,7 +651,8 @@ class FeedbackUI(QMainWindow):
             self.restoreState(state)
         self.settings.endGroup()
 
-        self.content = FeedbackContentWidget(prompt, predefined_options)
+        self.content = FeedbackContentWidget(prompt, predefined_options,
+                                              countdown_seconds=countdown_seconds)
         self.content.feedback_submitted.connect(self._on_submitted)
         self.setCentralWidget(self.content)
 
@@ -613,11 +684,14 @@ class FeedbackUI(QMainWindow):
         return self.feedback_result
 
 
-def feedback_ui(prompt: str, predefined_options: Optional[List[str]] = None, output_file: Optional[str] = None, window_id: str = "0") -> Optional[FeedbackResult]:
+def feedback_ui(prompt: str, predefined_options: Optional[List[str]] = None,
+                output_file: Optional[str] = None, window_id: str = "0",
+                countdown_seconds: int = 0) -> Optional[FeedbackResult]:
     app = QApplication.instance() or QApplication()
     app.setStyle("Fusion")
     app.setStyleSheet(GLOBAL_STYLE)
-    ui = FeedbackUI(prompt, predefined_options, window_id=window_id)
+    ui = FeedbackUI(prompt, predefined_options, window_id=window_id,
+                    countdown_seconds=countdown_seconds)
     result = ui.run()
 
     if output_file and result:
@@ -635,11 +709,13 @@ if __name__ == "__main__":
     parser.add_argument("--predefined-options", default="", help="Pipe-separated list of predefined options (|||)")
     parser.add_argument("--output-file", help="Path to save the feedback result as JSON")
     parser.add_argument("--window-id", default="0", help="Window identifier for multi-agent scenarios")
+    parser.add_argument("--countdown", type=int, default=0, help="Countdown seconds before auto-reply (0 = disabled)")
     args = parser.parse_args()
 
     predefined_options = [opt for opt in args.predefined_options.split("|||") if opt] if args.predefined_options else None
 
-    result = feedback_ui(args.prompt, predefined_options, args.output_file, window_id=args.window_id)
+    result = feedback_ui(args.prompt, predefined_options, args.output_file,
+                         window_id=args.window_id, countdown_seconds=args.countdown)
     if result:
         print(f"\nFeedback received:\n{result['interactive_feedback']}")
         if result.get('images'):

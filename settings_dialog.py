@@ -97,9 +97,13 @@ KEY_REREAD_RULES_DEFAULT = "reread_rules_default"
 KEY_CHECK_UPDATE = "check_update_on_start"
 KEY_CUSTOM_SUFFIX = "custom_suffix_text"
 KEY_TIMEOUT_MINUTES = "timeout_minutes"
+KEY_AUTO_REPLY_SECONDS = "auto_reply_seconds"
 KEY_HAS_UPDATE = "has_update"
 
 DEFAULT_TIMEOUT_MINUTES = 720  # 12 hours
+DEFAULT_AUTO_REPLY_SECONDS = 3000
+MAX_AUTO_REPLY_SECONDS = 3500
+AUTO_REPLY_MESSAGE = "请稍等, 我不在座位, 请立刻再次调用qt-interactive-feedback MCP与我交互, 刷新工具超时时间"
 
 
 def load_settings() -> dict:
@@ -110,6 +114,7 @@ def load_settings() -> dict:
         KEY_CHECK_UPDATE: s.value(KEY_CHECK_UPDATE, True, type=bool),
         KEY_CUSTOM_SUFFIX: s.value(KEY_CUSTOM_SUFFIX, "", type=str),
         KEY_TIMEOUT_MINUTES: s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int),
+        KEY_AUTO_REPLY_SECONDS: s.value(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS, type=int),
     }
 
 
@@ -131,12 +136,16 @@ def has_update_flag() -> bool:
 
 def get_soft_timeout() -> int:
     """Return SOFT_TIMEOUT in seconds from saved settings. Called by server.py.
-    Buffer = 5% of total, capped between 10s and 200s."""
+    Uses auto_reply_seconds directly since it represents the countdown before
+    auto-reply to avoid Cursor's hardcoded 3600s tool-call timeout."""
     s = QSettings(SETTINGS_ORG, SETTINGS_APP)
-    mins = s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int)
-    total_sec = mins * 60
-    buffer = max(10, min(200, int(total_sec * 0.05)))
-    return total_sec - buffer
+    return s.value(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS, type=int)
+
+
+def get_auto_reply_seconds() -> int:
+    """Return auto-reply countdown seconds. Called by server.py and feedback_ui.py."""
+    s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    return s.value(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS, type=int)
 
 
 def _find_mcp_json_paths() -> list:
@@ -275,6 +284,36 @@ class SettingsDialog(QDialog):
         timeout_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
         layout.addWidget(timeout_hint)
 
+        # Auto-reply countdown
+        lbl_auto_reply = QLabel("自动回复倒计时")
+        lbl_auto_reply.setStyleSheet(_section_title_style)
+        layout.addWidget(lbl_auto_reply)
+
+        auto_reply_row = QHBoxLayout()
+        auto_reply_row.setContentsMargins(12, 0, 0, 0)
+        auto_reply_row.addWidget(QLabel("倒计时秒数："))
+        self.auto_reply_spin = QSpinBox()
+        self.auto_reply_spin.setRange(60, MAX_AUTO_REPLY_SECONDS)
+        self.auto_reply_spin.setSuffix(" 秒")
+        self.auto_reply_spin.setStyleSheet(_spin_style)
+        self.auto_reply_spin.valueChanged.connect(self._validate_auto_reply)
+        auto_reply_row.addWidget(self.auto_reply_spin)
+        auto_reply_row.addStretch()
+        layout.addLayout(auto_reply_row)
+
+        auto_reply_hint = QLabel(
+            f"Cursor 对单个 MCP 工具调用有 3600 秒硬性超时。\n"
+            f"倒计时结束前未回复，将自动发送心跳消息避免超时。\n"
+            f"允许范围: 60 ~ {MAX_AUTO_REPLY_SECONDS} 秒（预留 100 秒缓冲）"
+        )
+        auto_reply_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
+        layout.addWidget(auto_reply_hint)
+
+        self._auto_reply_warn_label = QLabel("")
+        self._auto_reply_warn_label.setStyleSheet("color: #ff6b8a; font-size: 11px; margin-left: 12px;")
+        self._auto_reply_warn_label.setVisible(False)
+        layout.addWidget(self._auto_reply_warn_label)
+
         self._mcp_status_label = QLabel("")
         self._mcp_status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         self._mcp_status_label.setVisible(False)
@@ -327,6 +366,22 @@ class SettingsDialog(QDialog):
 
         self._load()
 
+    def _validate_auto_reply(self, value: int):
+        if value > MAX_AUTO_REPLY_SECONDS:
+            self._auto_reply_warn_label.setText(
+                f"⚠️ 不能超过 {MAX_AUTO_REPLY_SECONDS} 秒！\n"
+                f"原因：Cursor IDE 对 MCP 工具调用有 3600 秒硬性超时限制，\n"
+                f"必须预留至少 100 秒缓冲时间，否则会被 Cursor 强制中断。"
+            )
+            self._auto_reply_warn_label.setVisible(True)
+            self.auto_reply_spin.setValue(MAX_AUTO_REPLY_SECONDS)
+        elif value < 60:
+            self._auto_reply_warn_label.setText("⚠️ 最少 60 秒，太短会导致频繁自动回复。")
+            self._auto_reply_warn_label.setVisible(True)
+            self.auto_reply_spin.setValue(60)
+        else:
+            self._auto_reply_warn_label.setVisible(False)
+
     def _load(self):
         data = load_settings()
         self.cb_chinese.setChecked(data[KEY_CHINESE_DEFAULT])
@@ -336,6 +391,7 @@ class SettingsDialog(QDialog):
         total_mins = data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES)
         self.timeout_hours_spin.setValue(total_mins // 60)
         self.timeout_mins_spin.setValue(total_mins % 60)
+        self.auto_reply_spin.setValue(data.get(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS))
         if self._has_update:
             self._check_btn.set_badge(True)
 
@@ -343,12 +399,18 @@ class SettingsDialog(QDialog):
         total_mins = self.timeout_hours_spin.value() * 60 + self.timeout_mins_spin.value()
         if total_mins < 1:
             total_mins = 1
+        auto_reply_sec = self.auto_reply_spin.value()
+        if auto_reply_sec > MAX_AUTO_REPLY_SECONDS:
+            auto_reply_sec = MAX_AUTO_REPLY_SECONDS
+        if auto_reply_sec < 60:
+            auto_reply_sec = 60
         save_settings({
             KEY_CHINESE_DEFAULT: self.cb_chinese.isChecked(),
             KEY_REREAD_RULES_DEFAULT: self.cb_reread.isChecked(),
             KEY_CHECK_UPDATE: self.cb_update.isChecked(),
             KEY_CUSTOM_SUFFIX: self.suffix_edit.toPlainText().strip(),
             KEY_TIMEOUT_MINUTES: total_mins,
+            KEY_AUTO_REPLY_SECONDS: auto_reply_sec,
         })
         results = sync_mcp_json_timeout(total_mins)
         if results:
