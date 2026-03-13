@@ -263,14 +263,16 @@ class DaemonWindow(QMainWindow):
         except Exception as e:
             _log(f"CRITICAL: _poll_requests exception: {e}")
 
-    def _close_tabs_by_mcp_pid(self, mcp_pid: int) -> bool:
-        """Close all tabs belonging to the same MCP server process (agent session).
+    def _close_tabs_by_tab_id(self, tab_id: str) -> bool:
+        """Close all tabs belonging to the same agent session (identified by tab_id).
         Silently discards old sessions without sending [心跳] to avoid retry loops.
         Returns True if any tabs were replaced."""
+        if not tab_id:
+            return False
         to_remove = []
         for i in range(self.tabs.count()):
             tab = self.tabs.widget(i)
-            if isinstance(tab, FeedbackContentWidget) and tab.property("mcp_pid") == mcp_pid:
+            if isinstance(tab, FeedbackContentWidget) and tab.property("tab_id") == tab_id:
                 to_remove.append((i, tab))
 
         for idx, tab in reversed(to_remove):
@@ -280,18 +282,18 @@ class DaemonWindow(QMainWindow):
                 response_events.pop(old_sid, None)
             self.tabs.removeTab(idx)
             tab.deleteLater()
-            _log(f"Replaced tab from mcp_pid={mcp_pid} (old session {old_sid})")
+            _log(f"Replaced tab for tab_id={tab_id} (old session {old_sid})")
 
         return len(to_remove) > 0
 
     def _add_tab(self, data: dict):
         session_id = data.get("session_id", "unknown")
         try:
-            _log(f"Adding new tab for session {session_id}, mcp_pid={data.get('mcp_pid', 0)}, title={data.get('tab_title', '')}")
+            tab_id = data.get("tab_id", "")
+            _log(f"Adding new tab for session {session_id}, tab_id={tab_id}, title={data.get('tab_title', '')}")
             message = data.get("message", "")
             options = data.get("predefined_options") or None
             tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
-            mcp_pid = data.get("mcp_pid", 0)
             countdown = data.get("countdown_seconds", 0)
 
             if isinstance(options, list):
@@ -299,13 +301,11 @@ class DaemonWindow(QMainWindow):
                 if not options:
                     options = None
 
-            had_existing = False
-            if mcp_pid:
-                had_existing = self._close_tabs_by_mcp_pid(mcp_pid)
+            had_existing = self._close_tabs_by_tab_id(tab_id)
 
             tab = FeedbackContentWidget(message, options, countdown_seconds=countdown)
             tab.setProperty("session_id", session_id)
-            tab.setProperty("mcp_pid", mcp_pid)
+            tab.setProperty("tab_id", tab_id)
             if self._feishu_client:
                 tab.set_feishu_client(self._feishu_client)
             tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))

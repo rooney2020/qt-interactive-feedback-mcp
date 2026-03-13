@@ -215,7 +215,7 @@ async def _send_to_daemon(
         "tab_title": tab_title or f"\u4f1a\u8bdd #{session_id[:6]}",
         "message": message,
         "predefined_options": predefined_options or [],
-        "mcp_pid": os.getpid(),
+        "tab_id": tab_id,
         "countdown_seconds": countdown,
     }
 
@@ -391,6 +391,7 @@ async def interactive_feedback(
     message: str = Field(description="The specific question for the user"),
     predefined_options: list = Field(default=None, description="Predefined options for the user to choose from (optional)"),
     tab_title: str = Field(default="", description="Title for the feedback tab (shown in multi-session window). If empty, defaults to PID-based name."),
+    tab_id: str = Field(default="", description="Unique ID for this agent session. Same agent should always pass the same tab_id. Used to replace old tabs from the same agent."),
     ctx: Context = None,
 ):
     """Request interactive feedback from the user. Supports text and screenshot responses."""

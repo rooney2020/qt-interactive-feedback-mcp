@@ -272,6 +272,7 @@ bash setup.sh
 | `message` | string | 显示给用户的消息/问题 |
 | `predefined_options` | list | 预定义选项列表（可选） |
 | `tab_title` | string | Tab 标签页标题，用于区分不同会话（可选） |
+| `tab_id` | string | 会话唯一标识（UUID），用于 tab 去重。同一 agent 必须传相同值（可选） |
 
 ### 返回值
 
