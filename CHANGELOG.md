@@ -1,5 +1,11 @@
 # 版本履历
 
+## 1.1.1 (2026-03-13)
+
+### 改进
+- **Tab 去重** — 基于 MCP server PID 识别同一 agent 会话，自动替换旧 tab 而非重复创建
+- server.py 请求中新增 `mcp_pid` 字段，daemon 端通过 `_close_tabs_by_mcp_pid()` 清理同源旧 tab
+
 ## 1.1.0 (2026-03-13)
 
 ### 新功能
