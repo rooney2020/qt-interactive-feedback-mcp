@@ -204,6 +204,7 @@ async def _send_to_daemon(
     message: str,
     predefined_options: list[str] | None = None,
     tab_title: str = "",
+    tab_id: str = "",
     ctx: Context | None = None,
 ) -> tuple[dict, float, str]:
     """Send a feedback request to the daemon and wait for the response.
@@ -411,7 +412,7 @@ async def interactive_feedback(
                 _slog(f"Attempt {attempt+1}/{max_attempts} to send to daemon")
                 await _ensure_daemon_running()
                 result, session_elapsed, session_id_str = await _send_to_daemon(
-                    message, predefined_options_list, tab_title=tab_title, ctx=ctx
+                    message, predefined_options_list, tab_title=tab_title, tab_id=tab_id, ctx=ctx
                 )
                 _slog(f"Success on attempt {attempt+1}")
                 break

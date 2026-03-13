@@ -307,7 +307,13 @@ class DaemonWindow(QMainWindow):
             tab.setProperty("session_id", session_id)
             tab.setProperty("tab_id", tab_id)
             if self._feishu_client:
-                tab.set_feishu_client(self._feishu_client)
+                try:
+                    tab.set_feishu_client(self._feishu_client)
+                    _log(f"Feishu client set for session {session_id}")
+                except Exception as e:
+                    _log(f"ERROR setting feishu client: {e}")
+            else:
+                _log(f"No feishu client available for session {session_id}")
             tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))
 
             index = self.tabs.addTab(tab, tab_title)

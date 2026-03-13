@@ -53,7 +53,7 @@
 
 ### 🪟 多 Agent 并行
 - Linux daemon 模式：多个 agent 共享同一窗口，每个 agent 一个 tab
-- 基于 MCP server PID（`mcp_pid`）自动识别同一 agent 的多次调用，复用 tab 而非重复创建
+- 基于 `tab_id`（由 AI 模型生成的 UUID）自动识别同一 agent 的多次调用，复用 tab 而非重复创建
 - Windows / fallback 模式：基于文件锁的窗口 ID 管理
 
 ## 📦 安装
@@ -206,7 +206,7 @@ cp /usr/lib/x86_64-linux-gnu/qt6/plugins/platforminputcontexts/libfcitx5platform
 - 反馈交互核心规则（优先使用 interactive_feedback，失败降级到 AskQuestion）
 - 心跳保活与超时重连机制
 - Cursor MCP 工具注册表失效自动重试策略
-- `tab_title` 参数使用规范
+- `tab_id` / `tab_title` 参数使用规范
 
 将 `.cursor/rules/` 目录复制到你的项目中：
 
