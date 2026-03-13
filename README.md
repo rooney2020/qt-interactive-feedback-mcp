@@ -202,7 +202,13 @@ cp /usr/lib/x86_64-linux-gnu/qt6/plugins/platforminputcontexts/libfcitx5platform
 
 ### 2. Cursor Rules 配置
 
-项目提供了开箱即用的 Cursor Rules 文件。将 `.cursor/rules/` 目录复制到你的项目中：
+项目提供了开箱即用的 Cursor Rules 文件（`.cursor/rules/mcp-feedback.mdc`），包含：
+- 反馈交互核心规则（优先使用 interactive_feedback，失败降级到 AskQuestion）
+- 心跳保活与超时重连机制
+- Cursor MCP 工具注册表失效自动重试策略
+- `tab_title` 参数使用规范
+
+将 `.cursor/rules/` 目录复制到你的项目中：
 
 ```bash
 cp -r /path/to/interactive-feedback-mcp/.cursor/rules/ /your/project/.cursor/rules/
