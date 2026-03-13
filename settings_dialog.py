@@ -10,6 +10,7 @@ import urllib.error
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QCheckBox, QGroupBox, QFrame, QTextEdit, QSpinBox, QLineEdit,
+    QListWidget, QListWidgetItem, QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, QSettings, Signal, QObject
 from PySide6.QtGui import QPainter, QColor
@@ -101,13 +102,13 @@ KEY_REREAD_RULES_DEFAULT = "reread_rules_default"
 KEY_CHECK_UPDATE = "check_update_on_start"
 KEY_CUSTOM_SUFFIX = "custom_suffix_text"
 KEY_TIMEOUT_MINUTES = "timeout_minutes"
-KEY_AUTO_REPLY_SECONDS = "auto_reply_seconds"
 KEY_HAS_UPDATE = "has_update"
+KEY_QUICK_REPLIES = "quick_replies"
+KEY_QR_AUTO_SUBMIT = "quick_reply_auto_submit"
 
 DEFAULT_TIMEOUT_MINUTES = 720  # 12 hours
 DEFAULT_AUTO_REPLY_SECONDS = 3000
-MAX_AUTO_REPLY_SECONDS = 3500
-AUTO_REPLY_MESSAGE = "请稍等, 我不在座位, 请立刻再次调用qt-interactive-feedback MCP与我交互, 刷新工具超时时间"
+AUTO_REPLY_MESSAGE = "[自动回复] 用户暂未响应，请继续或稍后重试。"
 
 
 def load_settings() -> dict:
@@ -118,7 +119,6 @@ def load_settings() -> dict:
         KEY_CHECK_UPDATE: s.value(KEY_CHECK_UPDATE, True, type=bool),
         KEY_CUSTOM_SUFFIX: s.value(KEY_CUSTOM_SUFFIX, "", type=str),
         KEY_TIMEOUT_MINUTES: s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int),
-        KEY_AUTO_REPLY_SECONDS: s.value(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS, type=int),
     }
 
 
@@ -138,18 +138,41 @@ def has_update_flag() -> bool:
     return s.value(KEY_HAS_UPDATE, False, type=bool)
 
 
+_QUICK_REPLIES_FILE = os.path.join(_SCRIPT_DIR, ".quick_replies.json")
+
+
+def load_quick_replies() -> list[dict]:
+    try:
+        with open(_QUICK_REPLIES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        return []
+
+
+def is_quick_reply_auto_submit() -> bool:
+    s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    return s.value(KEY_QR_AUTO_SUBMIT, False, type=bool)
+
+
+def save_quick_replies(replies: list[dict]):
+    with open(_QUICK_REPLIES_FILE, "w", encoding="utf-8") as f:
+        json.dump(replies, f, ensure_ascii=False, indent=2)
+
+
 def get_soft_timeout() -> int:
     """Return SOFT_TIMEOUT in seconds from saved settings. Called by server.py.
-    Uses auto_reply_seconds directly since it represents the countdown before
-    auto-reply to avoid Cursor's hardcoded 3600s tool-call timeout."""
+    Buffer = 5% of total, capped between 10s and 200s."""
     s = QSettings(SETTINGS_ORG, SETTINGS_APP)
-    return s.value(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS, type=int)
+    mins = s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int)
+    total_sec = mins * 60
+    buffer = max(10, min(200, int(total_sec * 0.05)))
+    return total_sec - buffer
 
 
 def get_auto_reply_seconds() -> int:
-    """Return auto-reply countdown seconds. Called by server.py and feedback_ui.py."""
     s = QSettings(SETTINGS_ORG, SETTINGS_APP)
-    return s.value(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS, type=int)
+    return s.value("auto_reply_seconds", DEFAULT_AUTO_REPLY_SECONDS, type=int)
 
 
 def _find_mcp_json_paths() -> list:
@@ -188,6 +211,61 @@ def sync_mcp_json_timeout(timeout_minutes: int) -> list:
     return results
 
 
+# ── Quick Reply Edit Dialog ────────────────────────────────────────────
+
+class QuickReplyEditDialog(QDialog):
+    def __init__(self, title: str = "", content: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("编辑快捷回复")
+        self.setMinimumWidth(380)
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}"
+            f"QLabel {{ color: {TEXT_PRIMARY}; font-size: 13px; }}"
+            f"QLineEdit {{ background-color: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 6px; font-size: 13px; }}"
+            f"QTextEdit {{ background-color: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 6px; font-size: 13px; }}"
+            f"QPushButton {{ background: {ACCENT_BLUE}; color: white; border: none; "
+            f"border-radius: 4px; padding: 6px 20px; font-size: 13px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: #5ab0ff; }}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        layout.addWidget(QLabel("标题（显示在菜单中）："))
+        self._title_input = QLineEdit(title)
+        self._title_input.setPlaceholderText("例如：已完成、需要更多信息...")
+        layout.addWidget(self._title_input)
+
+        layout.addWidget(QLabel("内容（填入反馈输入框）："))
+        self._content_input = QTextEdit()
+        self._content_input.setPlainText(content)
+        self._content_input.setMinimumHeight(100)
+        self._content_input.setPlaceholderText("输入快捷回复的完整内容...")
+        layout.addWidget(self._content_input)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet(
+            f"QPushButton {{ background: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT_BLUE}; }}"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(self.accept)
+        btn_row.addWidget(ok_btn)
+        layout.addLayout(btn_row)
+
+    def title_text(self) -> str:
+        return self._title_input.text().strip()
+
+    def content_text(self) -> str:
+        return self._content_input.toPlainText().strip()
+
+
 # ── Settings Dialog ────────────────────────────────────────────────────
 
 class SettingsDialog(QDialog):
@@ -195,11 +273,13 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._has_update = has_update if has_update is not None else has_update_flag()
         self.setWindowTitle("MCP 反馈助手 - 设置")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(520)
+        self.setMinimumHeight(500)
+        self.resize(520, 640)
         _check_svg = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
         self.setStyleSheet(f"""
             QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}
-            QCheckBox {{ spacing: 10px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 1px 4px; margin-left: 12px; background: transparent; border: none; }}
+            QCheckBox {{ spacing: 10px; font-size: 13px; color: {TEXT_PRIMARY}; padding: 1px 4px; margin-left: 20px; background: transparent; border: none; }}
             QCheckBox:checked {{ background: transparent; }}
             QCheckBox::indicator {{
                 width: 16px; height: 16px; border-radius: 3px;
@@ -219,12 +299,39 @@ class SettingsDialog(QDialog):
                 border-radius: 4px; padding: 6px 20px; font-size: 13px; font-weight: bold;
             }}
             QPushButton:hover {{ background: #5ab0ff; }}
+            QScrollArea {{ border: none; background: transparent; }}
+            QScrollBar:vertical {{
+                background: {DARK_BG}; width: 8px; border: none; margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {DARK_BORDER}; border-radius: 4px; min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #555577;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none; height: 0;
+            }}
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 8)
+        outer_layout.setSpacing(0)
 
-        # Version info + update status on same row
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_widget = QWidget()
+        scroll_widget.setStyleSheet(f"QWidget {{ background-color: {DARK_BG}; }}")
+        layout = QVBoxLayout(scroll_widget)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 12, 16, 12)
+        scroll.setWidget(scroll_widget)
+        outer_layout.addWidget(scroll)
+
+        _INDENT = 24
+
         ver_row = QHBoxLayout()
         ver_label = QLabel(f"当前版本: {local_version()}")
         ver_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
@@ -236,13 +343,9 @@ class SettingsDialog(QDialog):
         ver_row.addStretch()
         layout.addLayout(ver_row)
 
-        _section_style = (
-            f"QFrame {{ background-color: {DARK_SURFACE}; border: 1px solid {DARK_BORDER}; "
-            f"border-radius: 6px; padding: 10px; }}"
-        )
         _section_title_style = (
             f"color: {ACCENT_BLUE}; font-size: 13px; font-weight: bold; "
-            f"padding: 0; margin-top: 4px;"
+            f"padding: 0; margin-top: 6px;"
         )
 
         # Default toggles
@@ -268,7 +371,7 @@ class SettingsDialog(QDialog):
             f"QSpinBox::up-button, QSpinBox::down-button {{ width: 16px; }}"
         )
         timeout_row = QHBoxLayout()
-        timeout_row.setContentsMargins(12, 0, 0, 0)
+        timeout_row.setContentsMargins(_INDENT, 0, 0, 0)
         timeout_row.addWidget(QLabel("单次调用最大等待："))
         self.timeout_hours_spin = QSpinBox()
         self.timeout_hours_spin.setRange(0, 48)
@@ -285,38 +388,8 @@ class SettingsDialog(QDialog):
         layout.addLayout(timeout_row)
 
         timeout_hint = QLabel("保存后自动同步 mcp.json，修改后需重启 Cursor 生效")
-        timeout_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
+        timeout_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
         layout.addWidget(timeout_hint)
-
-        # Auto-reply countdown
-        lbl_auto_reply = QLabel("自动回复倒计时")
-        lbl_auto_reply.setStyleSheet(_section_title_style)
-        layout.addWidget(lbl_auto_reply)
-
-        auto_reply_row = QHBoxLayout()
-        auto_reply_row.setContentsMargins(12, 0, 0, 0)
-        auto_reply_row.addWidget(QLabel("倒计时秒数："))
-        self.auto_reply_spin = QSpinBox()
-        self.auto_reply_spin.setRange(60, MAX_AUTO_REPLY_SECONDS)
-        self.auto_reply_spin.setSuffix(" 秒")
-        self.auto_reply_spin.setStyleSheet(_spin_style)
-        self.auto_reply_spin.valueChanged.connect(self._validate_auto_reply)
-        auto_reply_row.addWidget(self.auto_reply_spin)
-        auto_reply_row.addStretch()
-        layout.addLayout(auto_reply_row)
-
-        auto_reply_hint = QLabel(
-            f"Cursor 对单个 MCP 工具调用有 3600 秒硬性超时。\n"
-            f"倒计时结束前未回复，将自动发送心跳消息避免超时。\n"
-            f"允许范围: 60 ~ {MAX_AUTO_REPLY_SECONDS} 秒（预留 100 秒缓冲）"
-        )
-        auto_reply_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
-        layout.addWidget(auto_reply_hint)
-
-        self._auto_reply_warn_label = QLabel("")
-        self._auto_reply_warn_label.setStyleSheet("color: #ff6b8a; font-size: 11px; margin-left: 12px;")
-        self._auto_reply_warn_label.setVisible(False)
-        layout.addWidget(self._auto_reply_warn_label)
 
         self._mcp_status_label = QLabel("")
         self._mcp_status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
@@ -329,17 +402,93 @@ class SettingsDialog(QDialog):
         layout.addWidget(lbl_suffix)
 
         hint = QLabel("每次提交反馈时自动追加的文本（留空则不追加）：")
-        hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
+        hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
         layout.addWidget(hint)
+        suffix_wrapper = QHBoxLayout()
+        suffix_wrapper.setContentsMargins(_INDENT, 0, 0, 0)
         self.suffix_edit = QTextEdit()
         self.suffix_edit.setMaximumHeight(80)
         self.suffix_edit.setPlaceholderText("例如：请使用简洁的语言回复")
-        self.suffix_edit.setStyleSheet(
-            self.suffix_edit.styleSheet() if self.suffix_edit.styleSheet() else
-            f"QTextEdit {{ background-color: {DARK_SURFACE}; border: 1px solid {DARK_BORDER}; "
-            f"border-radius: 4px; padding: 6px; color: {TEXT_PRIMARY}; font-size: 12px; margin-left: 12px; }}"
+        suffix_wrapper.addWidget(self.suffix_edit)
+        layout.addLayout(suffix_wrapper)
+
+        # ── Quick replies management ───────────────────────────────────────
+        lbl_qr = QLabel("快捷回复")
+        lbl_qr.setStyleSheet(_section_title_style)
+        layout.addWidget(lbl_qr)
+
+        qr_wrapper = QVBoxLayout()
+        qr_wrapper.setContentsMargins(_INDENT, 0, 0, 0)
+
+        qr_auto_row = QHBoxLayout()
+        qr_auto_row.setContentsMargins(0, 0, 0, 0)
+        _check_svg = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\", "/")
+        _qr_cb_style = (
+            f"QCheckBox {{ spacing: 10px; font-size: 13px; color: {TEXT_PRIMARY}; "
+            f"padding: 1px 4px; margin-left: 0; background: transparent; border: none; }}"
+            f"QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 3px; "
+            f"border: 2px solid {DARK_BORDER}; background-color: {DARK_SURFACE}; }}"
+            f"QCheckBox::indicator:checked {{ border-color: {ACCENT_BLUE}; "
+            f"background-color: {DARK_SURFACE}; image: url(\"{_check_svg}\"); }}"
         )
-        layout.addWidget(self.suffix_edit)
+        self._qr_auto_submit = QCheckBox("选中后直接提交")
+        self._qr_auto_submit.setStyleSheet(_qr_cb_style)
+        self._qr_auto_submit.toggled.connect(self._qr_auto_submit_changed)
+        qr_auto_row.addWidget(self._qr_auto_submit)
+        qr_auto_tip = QLabel("勾选后选择快捷回复会自动提交，无需再点提交按钮")
+        qr_auto_tip.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        qr_auto_row.addWidget(qr_auto_tip)
+        qr_auto_row.addStretch()
+        qr_wrapper.addLayout(qr_auto_row)
+
+        self._qr_list = QListWidget()
+        self._qr_list.setMinimumHeight(150)
+        self._qr_list.setMaximumHeight(200)
+        self._qr_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._qr_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._qr_list.setStyleSheet(
+            f"QListWidget {{ background-color: {DARK_SURFACE}; border: 1px solid {DARK_BORDER}; "
+            f"border-radius: 4px; color: {TEXT_PRIMARY}; font-size: 12px; padding: 2px; outline: none; }}"
+            f"QListWidget::item {{ padding: 4px 8px; border: none; }}"
+            f"QListWidget::item:selected {{ background-color: rgba(74,158,255,0.2); color: white; border: none; }}"
+            f"QListWidget::item:hover:!selected {{ background-color: rgba(255,255,255,0.05); }}"
+        )
+        self._qr_list.currentRowChanged.connect(self._qr_selection_changed)
+        qr_wrapper.addWidget(self._qr_list)
+
+        _small_btn_style = (
+            f"QPushButton {{ background: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; padding: 3px 12px; font-size: 12px; font-weight: normal; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT_BLUE}; }}"
+            f"QPushButton:disabled {{ color: {TEXT_SECONDARY}; border-color: {DARK_SURFACE}; }}"
+        )
+        _del_btn_style = (
+            f"QPushButton {{ background: {DARK_SURFACE}; color: #ff6b8a; "
+            f"border: 1px solid {DARK_BORDER}; padding: 3px 12px; font-size: 12px; font-weight: normal; }}"
+            f"QPushButton:hover {{ border-color: #ff6b8a; }}"
+            f"QPushButton:disabled {{ color: {TEXT_SECONDARY}; border-color: {DARK_SURFACE}; }}"
+        )
+        qr_btn_row = QHBoxLayout()
+        qr_btn_row.setContentsMargins(0, 2, 0, 0)
+        qr_add_btn = QPushButton("添加")
+        qr_add_btn.setStyleSheet(_small_btn_style)
+        qr_add_btn.clicked.connect(self._qr_add)
+        qr_btn_row.addWidget(qr_add_btn)
+
+        self._qr_edit_btn = QPushButton("编辑")
+        self._qr_edit_btn.setStyleSheet(_small_btn_style)
+        self._qr_edit_btn.setEnabled(False)
+        self._qr_edit_btn.clicked.connect(self._qr_edit)
+        qr_btn_row.addWidget(self._qr_edit_btn)
+
+        self._qr_del_btn = QPushButton("删除")
+        self._qr_del_btn.setStyleSheet(_del_btn_style)
+        self._qr_del_btn.setEnabled(False)
+        self._qr_del_btn.clicked.connect(self._qr_delete)
+        qr_btn_row.addWidget(self._qr_del_btn)
+        qr_btn_row.addStretch()
+        qr_wrapper.addLayout(qr_btn_row)
+        layout.addLayout(qr_wrapper)
 
         # ── Feishu integration ─────────────────────────────────────────────
         lbl_feishu = QLabel("飞书集成")
@@ -347,7 +496,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(lbl_feishu)
 
         feishu_hint = QLabel("连接飞书后可在反馈输入框中 @用户/@群/@部门")
-        feishu_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
+        feishu_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
         layout.addWidget(feishu_hint)
 
         _input_style = (
@@ -355,9 +504,8 @@ class SettingsDialog(QDialog):
             f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 4px 8px; font-size: 12px; }}"
         )
         feishu_grid = QVBoxLayout()
-        feishu_grid.setContentsMargins(12, 0, 0, 0)
+        feishu_grid.setContentsMargins(_INDENT, 0, 0, 0)
 
-        # App ID
         row_id = QHBoxLayout()
         row_id.addWidget(QLabel("App ID:"))
         self.feishu_app_id = QLineEdit()
@@ -366,7 +514,6 @@ class SettingsDialog(QDialog):
         row_id.addWidget(self.feishu_app_id)
         feishu_grid.addLayout(row_id)
 
-        # App Secret
         row_secret = QHBoxLayout()
         row_secret.addWidget(QLabel("App Secret:"))
         self.feishu_app_secret = QLineEdit()
@@ -378,9 +525,8 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(feishu_grid)
 
-        # OAuth connect / status
         feishu_btn_row = QHBoxLayout()
-        feishu_btn_row.setContentsMargins(12, 0, 0, 0)
+        feishu_btn_row.setContentsMargins(_INDENT, 0, 0, 0)
 
         self._feishu_status = QLabel("")
         self._feishu_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
@@ -406,9 +552,12 @@ class SettingsDialog(QDialog):
         feishu_btn_row.addWidget(self._feishu_disconnect_btn)
 
         layout.addLayout(feishu_btn_row)
+        layout.addStretch()
 
-        # Buttons
+        # Bottom buttons (outside scroll area)
         btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(16, 8, 16, 0)
+        btn_layout.setSpacing(12)
         btn_layout.addStretch()
 
         self._check_btn_style_normal = (
@@ -432,25 +581,9 @@ class SettingsDialog(QDialog):
         save_btn = QPushButton("保存")
         save_btn.clicked.connect(self._save_and_close)
         btn_layout.addWidget(save_btn)
-        layout.addLayout(btn_layout)
+        outer_layout.addLayout(btn_layout)
 
         self._load()
-
-    def _validate_auto_reply(self, value: int):
-        if value > MAX_AUTO_REPLY_SECONDS:
-            self._auto_reply_warn_label.setText(
-                f"⚠️ 不能超过 {MAX_AUTO_REPLY_SECONDS} 秒！\n"
-                f"原因：Cursor IDE 对 MCP 工具调用有 3600 秒硬性超时限制，\n"
-                f"必须预留至少 100 秒缓冲时间，否则会被 Cursor 强制中断。"
-            )
-            self._auto_reply_warn_label.setVisible(True)
-            self.auto_reply_spin.setValue(MAX_AUTO_REPLY_SECONDS)
-        elif value < 60:
-            self._auto_reply_warn_label.setText("⚠️ 最少 60 秒，太短会导致频繁自动回复。")
-            self._auto_reply_warn_label.setVisible(True)
-            self.auto_reply_spin.setValue(60)
-        else:
-            self._auto_reply_warn_label.setVisible(False)
 
     def _load(self):
         data = load_settings()
@@ -461,9 +594,10 @@ class SettingsDialog(QDialog):
         total_mins = data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES)
         self.timeout_hours_spin.setValue(total_mins // 60)
         self.timeout_mins_spin.setValue(total_mins % 60)
-        self.auto_reply_spin.setValue(data.get(KEY_AUTO_REPLY_SECONDS, DEFAULT_AUTO_REPLY_SECONDS))
-        if self._has_update:
-            self._check_btn.set_badge(True)
+        # Quick replies
+        self._quick_replies = load_quick_replies()
+        self._qr_auto_submit.setChecked(is_quick_reply_auto_submit())
+        self._qr_refresh_list()
 
         # Feishu settings
         s = QSettings("InteractiveFeedbackMCP", "Settings")
@@ -475,19 +609,18 @@ class SettingsDialog(QDialog):
         total_mins = self.timeout_hours_spin.value() * 60 + self.timeout_mins_spin.value()
         if total_mins < 1:
             total_mins = 1
-        auto_reply_sec = self.auto_reply_spin.value()
-        if auto_reply_sec > MAX_AUTO_REPLY_SECONDS:
-            auto_reply_sec = MAX_AUTO_REPLY_SECONDS
-        if auto_reply_sec < 60:
-            auto_reply_sec = 60
         save_settings({
             KEY_CHINESE_DEFAULT: self.cb_chinese.isChecked(),
             KEY_REREAD_RULES_DEFAULT: self.cb_reread.isChecked(),
             KEY_CHECK_UPDATE: self.cb_update.isChecked(),
             KEY_CUSTOM_SUFFIX: self.suffix_edit.toPlainText().strip(),
             KEY_TIMEOUT_MINUTES: total_mins,
-            KEY_AUTO_REPLY_SECONDS: auto_reply_sec,
         })
+        # Quick replies
+        save_quick_replies(self._quick_replies)
+        s_qr = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        s_qr.setValue(KEY_QR_AUTO_SUBMIT, self._qr_auto_submit.isChecked())
+
         # Feishu credentials
         s = QSettings("InteractiveFeedbackMCP", "Settings")
         s.setValue("feishu_app_id", self.feishu_app_id.text().strip())
@@ -508,6 +641,56 @@ class SettingsDialog(QDialog):
             self.accept()
             return
         self.accept()
+
+    # ── Quick reply methods ──────────────────────────────────────────────
+
+    def _qr_auto_submit_changed(self, checked: bool):
+        s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        s.setValue(KEY_QR_AUTO_SUBMIT, checked)
+
+    def _qr_selection_changed(self, row: int):
+        has_sel = row >= 0
+        self._qr_edit_btn.setEnabled(has_sel)
+        self._qr_del_btn.setEnabled(has_sel)
+
+    def _qr_refresh_list(self):
+        self._qr_list.clear()
+        for qr in self._quick_replies:
+            title = qr.get("title", "")
+            content = qr.get("content", "")
+            preview = content[:40].replace("\n", " ")
+            if len(content) > 40:
+                preview += "..."
+            item = QListWidgetItem(f"{title}  —  {preview}" if title else preview)
+            self._qr_list.addItem(item)
+
+    def _qr_add(self):
+        dlg = QuickReplyEditDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            t, c = dlg.title_text(), dlg.content_text()
+            if t or c:
+                self._quick_replies.append({"title": t, "content": c})
+                save_quick_replies(self._quick_replies)
+                self._qr_refresh_list()
+
+    def _qr_edit(self):
+        row = self._qr_list.currentRow()
+        if row < 0:
+            return
+        qr = self._quick_replies[row]
+        dlg = QuickReplyEditDialog(title=qr.get("title", ""), content=qr.get("content", ""), parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._quick_replies[row] = {"title": dlg.title_text(), "content": dlg.content_text()}
+            save_quick_replies(self._quick_replies)
+            self._qr_refresh_list()
+
+    def _qr_delete(self):
+        row = self._qr_list.currentRow()
+        if row < 0:
+            return
+        self._quick_replies.pop(row)
+        save_quick_replies(self._quick_replies)
+        self._qr_refresh_list()
 
     # ── Feishu methods ──────────────────────────────────────────────────
 
@@ -531,19 +714,24 @@ class SettingsDialog(QDialog):
         if client is None:
             self._feishu_status.setText("飞书模块不可用")
             self._feishu_status.setStyleSheet("color: #ff6b8a; font-size: 12px;")
+            self._feishu_connect_btn.setVisible(True)
+            self._feishu_disconnect_btn.setVisible(False)
             return
         status = client.status_text
         if client.has_user_token:
             self._feishu_status.setText(f"✅ {status}")
             self._feishu_status.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
+            self._feishu_connect_btn.setVisible(False)
             self._feishu_disconnect_btn.setVisible(True)
         elif client.is_configured:
             self._feishu_status.setText(f"✅ {status}")
             self._feishu_status.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
+            self._feishu_connect_btn.setVisible(not client._user_refresh)
             self._feishu_disconnect_btn.setVisible(bool(client._user_refresh))
         else:
             self._feishu_status.setText(status)
             self._feishu_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+            self._feishu_connect_btn.setVisible(True)
             self._feishu_disconnect_btn.setVisible(False)
 
     def _feishu_oauth(self):

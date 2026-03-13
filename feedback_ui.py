@@ -12,16 +12,15 @@ from typing import TypedDict, Optional, List
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QCheckBox, QTextEdit, QGroupBox,
-    QFrame, QScrollArea, QFileDialog, QSizePolicy,
+    QFrame, QScrollArea, QFileDialog, QSizePolicy, QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSettings, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage
 
 from settings_dialog import (
-    SettingsDialog, load_settings, KEY_CHINESE_DEFAULT,
-    KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX, BadgePushButton,
-    has_update_flag, get_auto_reply_seconds, AUTO_REPLY_MESSAGE,
-    DEFAULT_AUTO_REPLY_SECONDS,
+    SettingsDialog, load_settings, load_quick_replies, is_quick_reply_auto_submit,
+    KEY_CHINESE_DEFAULT, KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX,
+    BadgePushButton, has_update_flag, AUTO_REPLY_MESSAGE,
 )
 
 
@@ -305,10 +304,10 @@ class FeedbackContentWidget(QWidget):
         self.prompt = prompt
         self.predefined_options = predefined_options or []
         self.screenshots: List[QPixmap] = []
-        self._countdown_total = countdown_seconds
-        self._countdown_remaining = countdown_seconds
         self._feishu_client = None
         self._mention_tracker = None
+        self._countdown_total = countdown_seconds
+        self._countdown_remaining = countdown_seconds
         self._create_ui()
 
     def set_feishu_client(self, client):
@@ -332,7 +331,6 @@ class FeedbackContentWidget(QWidget):
         main_layout.setContentsMargins(12, 8, 12, 8)
         main_layout.setSpacing(6)
 
-        # Countdown timer display
         self._countdown_label = QLabel("")
         self._countdown_label.setAlignment(Qt.AlignCenter)
         self._countdown_label.setWordWrap(True)
@@ -414,6 +412,12 @@ class FeedbackContentWidget(QWidget):
             f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 3px 10px; font-size: 11px; }}"
             f"QPushButton:hover {{ background: rgba(255,255,255,0.05); color: {TEXT_PRIMARY}; border-color: {ACCENT_BLUE}; }}"
         )
+
+        self._quick_reply_btn = QPushButton("⚡ 快捷回复")
+        self._quick_reply_btn.setStyleSheet(_action_btn_style)
+        self._quick_reply_btn.setToolTip("选择预设的快捷回复内容")
+        self._quick_reply_btn.clicked.connect(self._show_quick_reply_menu)
+        feedback_header.addWidget(self._quick_reply_btn)
 
         self._mention_btn = QPushButton("@ \u63d0\u53ca")
         self._mention_btn.setStyleSheet(_action_btn_style)
@@ -529,6 +533,38 @@ class FeedbackContentWidget(QWidget):
                 cursor.removeSelectedText()
                 self.feedback_text.setTextCursor(cursor)
         self._open_mention_dialog()
+
+    def _show_quick_reply_menu(self):
+        replies = load_quick_replies()
+        auto_submit = is_quick_reply_auto_submit()
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #2a2a3e; border: 1px solid #3a3a5a; "
+            "border-radius: 6px; padding: 4px; }"
+            "QMenu::item { color: #e0e0e0; padding: 6px 16px; font-size: 12px; }"
+            "QMenu::item:selected { background-color: rgba(74,158,255,0.2); }"
+        )
+        if not replies:
+            action = menu.addAction("（无快捷回复，请在设置中添加）")
+            action.setEnabled(False)
+        else:
+            for qr in replies:
+                title = qr.get("title", "")
+                content = qr.get("content", "")
+                label = title or content[:30]
+                action = menu.addAction(label)
+                action.setData(content)
+        chosen = menu.exec(self._quick_reply_btn.mapToGlobal(
+            self._quick_reply_btn.rect().bottomLeft()))
+        if chosen and chosen.data():
+            content = chosen.data()
+            self.feedback_text.setPlainText(content)
+            from PySide6.QtGui import QTextCursor
+            cursor = self.feedback_text.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.feedback_text.setTextCursor(cursor)
+            if auto_submit:
+                QTimer.singleShot(50, self._submit_feedback)
 
     def _open_mention_dialog(self):
         if not self._feishu_client:
@@ -673,10 +709,7 @@ class FeedbackContentWidget(QWidget):
     def _update_countdown_text(self):
         r = self._countdown_remaining
         minutes, seconds = divmod(r, 60)
-        if minutes > 0:
-            time_str = f"{minutes} 分 {seconds} 秒"
-        else:
-            time_str = f"{seconds} 秒"
+        time_str = f"{minutes} 分 {seconds} 秒" if minutes > 0 else f"{seconds} 秒"
         self._countdown_label.setText(
             f"⏱️ 请在 {time_str} 内回复 | "
             f"倒计时结束后会自动回复，您编辑的内容将消失，请注意保存"
@@ -707,10 +740,10 @@ class FeedbackContentWidget(QWidget):
             self._countdown_timer.stop()
 
     def _auto_submit_heartbeat(self):
-        """Auto-submit the preset heartbeat message when countdown reaches 0."""
         result = FeedbackResult(
             interactive_feedback=AUTO_REPLY_MESSAGE,
             images=[],
+            mentioned_entities=[],
         )
         self.feedback_submitted.emit(result)
 
@@ -722,6 +755,7 @@ class FeedbackUI(QMainWindow):
                  window_id: str = "0", countdown_seconds: int = 0):
         super().__init__()
         self.feedback_result = None
+        self._countdown_seconds = countdown_seconds
 
         title = "MCP \u53cd\u9988\u52a9\u624b"
         if window_id and window_id != "0":
@@ -731,6 +765,7 @@ class FeedbackUI(QMainWindow):
         icon_path = os.path.join(script_dir, "images", "feedback.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
+        # Normal window level, not always-on-top
 
         self.settings = QSettings("InteractiveFeedbackMCP", "InteractiveFeedbackMCP")
         self.settings.beginGroup("MainWindow_General")
@@ -749,7 +784,7 @@ class FeedbackUI(QMainWindow):
         self.settings.endGroup()
 
         self.content = FeedbackContentWidget(prompt, predefined_options,
-                                              countdown_seconds=countdown_seconds)
+                                              countdown_seconds=self._countdown_seconds)
         self.content.feedback_submitted.connect(self._on_submitted)
         self.setCentralWidget(self.content)
 
