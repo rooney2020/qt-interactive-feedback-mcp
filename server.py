@@ -34,6 +34,14 @@ def _load_soft_timeout() -> int:
     except Exception:
         return 43000
 
+def _load_auto_reply_seconds() -> int:
+    """Load auto-reply countdown seconds from settings."""
+    try:
+        from settings_dialog import get_auto_reply_seconds
+        return get_auto_reply_seconds()
+    except Exception:
+        return 3000
+
 SOFT_TIMEOUT = _load_soft_timeout()
 
 def _adaptive_heartbeat_interval(elapsed: float) -> float:
@@ -200,6 +208,7 @@ async def _send_to_daemon(
 ) -> tuple[dict, float, str]:
     """Send a feedback request to the daemon and wait for the response.
     Returns (result_dict, elapsed_seconds, session_id)."""
+    countdown = _load_auto_reply_seconds()
     session_id = uuid.uuid4().hex[:12]
     request = {
         "session_id": session_id,
@@ -207,6 +216,7 @@ async def _send_to_daemon(
         "message": message,
         "predefined_options": predefined_options or [],
         "mcp_pid": os.getpid(),
+        "countdown_seconds": countdown,
     }
 
     reader, writer = await asyncio.open_unix_connection(SOCKET_PATH, limit=16 * 1024 * 1024)
@@ -293,6 +303,8 @@ async def _launch_feedback_standalone(
     window_id: int = 1,
 ) -> dict:
     """Launch feedback_ui.py as a standalone subprocess."""
+    countdown = _load_auto_reply_seconds()
+
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         output_file = tmp.name
 
@@ -306,6 +318,7 @@ async def _launch_feedback_standalone(
             "--output-file", output_file,
             "--predefined-options", "|||".join(predefined_options) if predefined_options else "",
             "--window-id", str(window_id),
+            "--countdown", str(countdown),
         ]
         env = os.environ.copy()
         if sys.platform == "linux":

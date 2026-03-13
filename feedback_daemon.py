@@ -291,6 +291,7 @@ class DaemonWindow(QMainWindow):
             options = data.get("predefined_options") or None
             tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
             mcp_pid = data.get("mcp_pid", 0)
+            countdown = data.get("countdown_seconds", 0)
 
             if isinstance(options, list):
                 options = [str(o) for o in options if o]
@@ -300,7 +301,7 @@ class DaemonWindow(QMainWindow):
             if mcp_pid:
                 self._close_tabs_by_mcp_pid(mcp_pid)
 
-            tab = FeedbackContentWidget(message, options)
+            tab = FeedbackContentWidget(message, options, countdown_seconds=countdown)
             tab.setProperty("session_id", session_id)
             tab.setProperty("mcp_pid", mcp_pid)
             if self._feishu_client:
