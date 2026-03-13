@@ -114,12 +114,108 @@ rm -f /tmp/mcp_feedback_daemon.sock /tmp/mcp_feedback_daemon.lock
 
 ```bash
 # 确认环境变量
-echo $QT_IM_MODULE  # 应该是 fcitx
-echo $XMODIFIERS     # 应该是 @im=fcitx
+echo $QT_IM_MODULE  # 应该是 fcitx 或 fcitx5
+echo $XMODIFIERS     # 应该是 @im=fcitx 或 @im=fcitx5
 
-# 确认 fcitx4 Qt6 插件已安装（参见 README.md）
+# 确认 fcitx Qt6 插件已安装（参见 README.md）
 ls $(cd ~/.cursor/Interactive-Feedback-With-Capture-MCP && uv run python -c \
   "from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))")/platforminputcontexts/
+
+# 检查 .im_config.json 是否存在
+cat ~/.cursor/Interactive-Feedback-With-Capture-MCP/.im_config.json
+```
+
+### 6. GLIBCXX 版本不兼容（Ubuntu 20.04 等旧版系统）
+
+**症状：** fcitx Qt6 插件已安装到 PySide6 目录，但中文输入仍然不工作。Daemon 日志中可能出现类似 `undefined symbol: _ZNSt7__...` 或 `GLIBCXX_3.4.29 not found` 的错误。
+
+**原因：** 从 Ubuntu 24.04 软件包提取的 fcitx Qt6 插件编译时链接了较新的 `libstdc++`，需要 `GLIBCXX_3.4.29`，而 Ubuntu 20.04 系统的 `libstdc++` 只提供到 `GLIBCXX_3.4.28`。
+
+**诊断步骤：**
+
+```bash
+# 1. 检查系统 GLIBCXX 最高版本
+strings /usr/lib/x86_64-linux-gnu/libstdc++.so.6 | grep GLIBCXX | sort -V | tail -5
+
+# 2. 检查 fcitx 插件需要的 GLIBCXX 版本
+PLUGINS_DIR=$(cd ~/.cursor/Interactive-Feedback-With-Capture-MCP && uv run python -c \
+  "from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))")
+strings "$PLUGINS_DIR/platforminputcontexts/libfcitxplatforminputcontextplugin-qt6.so" | grep GLIBCXX | sort -V | tail -5
+
+# 3. 检查 .im_config.json 中的 ld_preload 配置
+cat ~/.cursor/Interactive-Feedback-With-Capture-MCP/.im_config.json
+
+# 4. 如果 ld_preload 有值，验证该 libstdc++ 是否可用
+# （将路径替换为 .im_config.json 中的实际路径）
+strings /path/to/libstdc++.so.6 | grep GLIBCXX_3.4.29
+
+# 5. 检查 daemon 日志中的 LD_PRELOAD 相关信息
+grep -i "ld_preload\|re-executing\|libstdc" /tmp/mcp_feedback_daemon.log | tail -10
+grep -i "ld_preload" /tmp/mcp_feedback_server.log | tail -10
+```
+
+**修复方案：**
+
+**方案 A：重新运行 setup.sh（推荐）**
+
+```bash
+cd ~/.cursor/Interactive-Feedback-With-Capture-MCP
+bash setup.sh
+```
+
+`setup.sh` 会自动检测 GLIBCXX 兼容性，搜索 Conda 等环境中的兼容 `libstdc++`，并写入 `.im_config.json`。程序启动时会自动应用 `LD_PRELOAD`。
+
+**方案 B：手动创建 `.im_config.json`**
+
+```bash
+# 找一个提供 GLIBCXX_3.4.29 的 libstdc++
+# 常见来源：Conda (miniconda3/miniforge3/anaconda3)、较新的 GCC
+for lib in ~/miniconda3/lib/libstdc++.so.6 ~/miniforge3/lib/libstdc++.so.6 ~/anaconda3/lib/libstdc++.so.6; do
+  if [[ -f "$lib" ]] && strings "$lib" | grep -q "GLIBCXX_3.4.29"; then
+    echo "✅ Found: $lib -> $(readlink -f "$lib")"
+  fi
+done
+
+# 创建配置（替换为实际路径）
+cat > ~/.cursor/Interactive-Feedback-With-Capture-MCP/.im_config.json << 'EOF'
+{
+    "im_module": "fcitx",
+    "ld_preload": "/home/用户名/miniconda3/lib/libstdc++.so.6.0.34"
+}
+EOF
+```
+
+**方案 C：安装较新的 libstdc++**
+
+```bash
+# 通过 Conda（推荐，不影响系统）
+conda install -c conda-forge libstdcxx-ng
+
+# 或者安装较新的 GCC（会装很多依赖）
+sudo apt install g++-11
+```
+
+安装后重新运行 `bash setup.sh`。
+
+**方案 D：手动使用 LD_PRELOAD 启动 daemon（临时调试）**
+
+```bash
+LD_PRELOAD=/path/to/libstdc++.so.6 \
+  QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx \
+  uv run python -u feedback_daemon.py
+```
+
+**验证修复：**
+
+```bash
+# 1. 停止旧 daemon
+pkill -f "feedback_daemon.py"
+rm -f /tmp/mcp_feedback_daemon.sock /tmp/mcp_feedback_daemon.lock
+
+# 2. 重启 Cursor MCP 或等待下次调用自动拉起
+
+# 3. 查看日志确认 LD_PRELOAD 生效
+grep "LD_PRELOAD\|Re-executing" /tmp/mcp_feedback_daemon.log | tail -5
 ```
 
 ## 让 Cursor 自动修复

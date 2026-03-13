@@ -65,9 +65,34 @@ cd ~/.cursor/Interactive-Feedback-MCP
 uv sync
 ```
 
-### Linux 中文输入配置（fcitx4 环境）
+### Linux 中文输入配置
 
-如果你使用 fcitx4 + 搜狗/百度拼音，需要额外配置 Qt6 输入法插件：
+> **推荐方式：** 运行 `bash setup.sh` 会自动检测输入法框架、安装插件、检查 GLIBCXX 兼容性并生成配置。下面的手动步骤仅在自动配置失败时使用。
+
+#### 自动配置（推荐）
+
+```bash
+cd /path/to/interactive-feedback-mcp
+bash setup.sh
+```
+
+`setup.sh` 会自动完成：
+1. 检测输入法框架（fcitx4 / fcitx5 / ibus）
+2. 下载并安装对应的 Qt6 输入法插件
+3. **检测 GLIBCXX 兼容性**——如果系统 `libstdc++` 版本不够（如 Ubuntu 20.04），自动搜索 Conda 等环境中的兼容版本
+4. 生成 `.im_config.json`，程序启动时自动应用 `LD_PRELOAD` 等环境变量
+
+#### 各 Ubuntu 版本兼容性
+
+| Ubuntu 版本 | 系统 GLIBCXX | fcitx 版本 | 是否需要 LD_PRELOAD | 备注 |
+|-------------|-------------|-----------|-------------------|------|
+| 24.04 Noble | ≥ 3.4.32 | fcitx5 (默认) | ❌ 不需要 | 开箱即用 |
+| 22.04 Jammy | ≥ 3.4.30 | fcitx4/5 | ❌ 不需要 | 需手动安装 fcitx Qt6 插件 |
+| 20.04 Focal | 3.4.28 | fcitx4 | ✅ 需要 | 插件要求 GLIBCXX_3.4.29，需 LD_PRELOAD |
+
+#### 手动配置：fcitx4 环境
+
+**适用于所有 Ubuntu 版本：**
 
 ```bash
 # 1. 下载 fcitx4 的 Qt6 前端插件（Ubuntu 24.04 的包）
@@ -78,12 +103,54 @@ mkdir -p /tmp/fcitx-qt6-extract
 dpkg-deb -x /tmp/fcitx-frontend-qt6.deb /tmp/fcitx-qt6-extract
 
 # 3. 找到 PySide6 插件目录并复制
-PLUGINS_DIR=$(cd ~/.cursor/Interactive-Feedback-MCP && uv run python -c \
+PLUGINS_DIR=$(cd /path/to/interactive-feedback-mcp && uv run python -c \
   "from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))")
 cp /tmp/fcitx-qt6-extract/usr/lib/x86_64-linux-gnu/qt6/plugins/platforminputcontexts/libfcitxplatforminputcontextplugin-qt6.so \
    "$PLUGINS_DIR/platforminputcontexts/"
 
 echo "✅ fcitx4 Qt6 插件已安装"
+```
+
+**Ubuntu 20.04 额外步骤（GLIBCXX 兼容）：**
+
+Ubuntu 20.04 的系统 `libstdc++` 只提供到 `GLIBCXX_3.4.28`，而 fcitx Qt6 插件需要 `GLIBCXX_3.4.29`。解决方案是通过 `LD_PRELOAD` 预加载兼容版本。
+
+`setup.sh` 会自动检测并处理此问题。如需手动配置：
+
+```bash
+# 确认系统是否缺少 GLIBCXX_3.4.29
+strings /usr/lib/x86_64-linux-gnu/libstdc++.so.6 | grep GLIBCXX_3.4.29
+# 如果无输出，说明需要 LD_PRELOAD
+
+# 方法1: 使用 Conda 提供的 libstdc++
+# Conda 的 libstdc++.so.6 通常提供 GLIBCXX_3.4.29+ 且兼容 Ubuntu 20.04 的 GLIBC_2.31
+strings ~/miniconda3/lib/libstdc++.so.6 | grep GLIBCXX_3.4.29  # 验证
+
+# 手动创建 .im_config.json
+cat > /path/to/interactive-feedback-mcp/.im_config.json << 'EOF'
+{
+    "im_module": "fcitx",
+    "ld_preload": "/home/你的用户名/miniconda3/lib/libstdc++.so.6.0.34"
+}
+EOF
+# 将路径替换为实际的 libstdc++ 路径（用 readlink -f 获取真实路径）
+
+# 方法2: 安装较新的 GCC
+sudo apt install g++-11
+# 然后重新运行 setup.sh
+```
+
+#### 手动配置：fcitx5 环境
+
+```bash
+# Ubuntu 22.04+ 通常有系统包可用
+sudo apt install fcitx5-frontend-qt6
+
+# 复制插件到 PySide6 目录
+PLUGINS_DIR=$(cd /path/to/interactive-feedback-mcp && uv run python -c \
+  "from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))")
+cp /usr/lib/x86_64-linux-gnu/qt6/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so \
+   "$PLUGINS_DIR/platforminputcontexts/"
 ```
 
 ## ⚙️ Cursor 配置

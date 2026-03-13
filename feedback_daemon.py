@@ -456,7 +456,46 @@ class DaemonWindow(QMainWindow):
         event.ignore()
 
 
+def _apply_ld_preload_if_needed():
+    """Re-exec the process with LD_PRELOAD when .im_config.json requires it.
+
+    On older systems (e.g. Ubuntu 20.04) the fcitx Qt6 plugin needs a newer
+    libstdc++ than what the system provides.  LD_PRELOAD must be visible to the
+    dynamic linker *before* the process loads any shared library, so we re-exec
+    ourselves when the variable is not yet present.
+    """
+    im_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".im_config.json")
+    if not os.path.exists(im_config_path):
+        return
+
+    try:
+        import json as _json
+        with open(im_config_path) as f:
+            config = _json.load(f)
+
+        im_module = config.get("im_module", "fcitx")
+        os.environ.setdefault("QT_IM_MODULE", im_module)
+        os.environ.setdefault("XMODIFIERS", f"@im={im_module}")
+
+        ld_preload = config.get("ld_preload", "")
+        if not ld_preload or not os.path.exists(ld_preload):
+            return
+
+        current = os.environ.get("LD_PRELOAD", "")
+        if ld_preload in current:
+            return  # already applied
+
+        os.environ["LD_PRELOAD"] = f"{ld_preload}:{current}" if current else ld_preload
+        _log(f"Re-executing with LD_PRELOAD={os.environ['LD_PRELOAD']}")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        _log(f"_apply_ld_preload_if_needed failed: {e}")
+
+
 def main():
+    # Must run before QApplication — ensures LD_PRELOAD is active for Qt plugin loading
+    _apply_ld_preload_if_needed()
+
     _log(f"Daemon starting, pid={os.getpid()}")
     lock_fd = open(LOCK_PATH, "w")
     try:
@@ -480,8 +519,17 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     if sys.platform == "linux":
-        os.environ.setdefault("QT_IM_MODULE", "fcitx")
-        os.environ.setdefault("XMODIFIERS", "@im=fcitx")
+        im_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".im_config.json")
+        im_module = "fcitx"
+        if os.path.exists(im_config_path):
+            try:
+                import json as _json
+                with open(im_config_path) as f:
+                    im_module = _json.load(f).get("im_module", "fcitx")
+            except Exception:
+                pass
+        os.environ.setdefault("QT_IM_MODULE", im_module)
+        os.environ.setdefault("XMODIFIERS", f"@im={im_module}")
 
     window = DaemonWindow()
     _log("DaemonWindow created, entering event loop")
