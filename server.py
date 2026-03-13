@@ -463,6 +463,13 @@ async def interactive_feedback(
 
     text = result.get("interactive_feedback", "")
     images_b64 = result.get("images", [])
+    mentioned = result.get("mentioned_entities", [])
+
+    if mentioned:
+        text += "\n\n[Mentioned entities:\n"
+        for m in mentioned:
+            text += f"  - {m.get('type', 'user')}: {m.get('name', '')} (id={m.get('id', '')})\n"
+        text += "]"
 
     if not images_b64:
         return {"interactive_feedback": text}

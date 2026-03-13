@@ -9,7 +9,7 @@ import urllib.error
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QCheckBox, QGroupBox, QFrame, QTextEdit, QSpinBox,
+    QCheckBox, QGroupBox, QFrame, QTextEdit, QSpinBox, QLineEdit,
 )
 from PySide6.QtCore import Qt, QSettings, Signal, QObject
 from PySide6.QtGui import QPainter, QColor
@@ -39,6 +39,10 @@ def local_version() -> str:
 
 class _VersionSignal(QObject):
     result = Signal(str, str)  # (remote_version, error)
+
+
+class _FeishuOAuthSignal(QObject):
+    done = Signal(bool, str)  # (success, message)
 
 
 def check_version_async(callback):
@@ -337,6 +341,72 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.suffix_edit)
 
+        # ── Feishu integration ─────────────────────────────────────────────
+        lbl_feishu = QLabel("飞书集成")
+        lbl_feishu.setStyleSheet(_section_title_style)
+        layout.addWidget(lbl_feishu)
+
+        feishu_hint = QLabel("连接飞书后可在反馈输入框中 @用户/@群/@部门")
+        feishu_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: 12px;")
+        layout.addWidget(feishu_hint)
+
+        _input_style = (
+            f"QLineEdit {{ background-color: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 4px 8px; font-size: 12px; }}"
+        )
+        feishu_grid = QVBoxLayout()
+        feishu_grid.setContentsMargins(12, 0, 0, 0)
+
+        # App ID
+        row_id = QHBoxLayout()
+        row_id.addWidget(QLabel("App ID:"))
+        self.feishu_app_id = QLineEdit()
+        self.feishu_app_id.setPlaceholderText("自动从 mcp.json 读取（可手动覆盖）")
+        self.feishu_app_id.setStyleSheet(_input_style)
+        row_id.addWidget(self.feishu_app_id)
+        feishu_grid.addLayout(row_id)
+
+        # App Secret
+        row_secret = QHBoxLayout()
+        row_secret.addWidget(QLabel("App Secret:"))
+        self.feishu_app_secret = QLineEdit()
+        self.feishu_app_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.feishu_app_secret.setPlaceholderText("自动从 mcp.json 读取（可手动覆盖）")
+        self.feishu_app_secret.setStyleSheet(_input_style)
+        row_secret.addWidget(self.feishu_app_secret)
+        feishu_grid.addLayout(row_secret)
+
+        layout.addLayout(feishu_grid)
+
+        # OAuth connect / status
+        feishu_btn_row = QHBoxLayout()
+        feishu_btn_row.setContentsMargins(12, 0, 0, 0)
+
+        self._feishu_status = QLabel("")
+        self._feishu_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+        feishu_btn_row.addWidget(self._feishu_status)
+        feishu_btn_row.addStretch()
+
+        self._feishu_connect_btn = QPushButton("连接飞书")
+        self._feishu_connect_btn.setStyleSheet(
+            f"QPushButton {{ background: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; padding: 4px 14px; font-size: 12px; font-weight: normal; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT_BLUE}; }}"
+        )
+        self._feishu_connect_btn.clicked.connect(self._feishu_oauth)
+        feishu_btn_row.addWidget(self._feishu_connect_btn)
+
+        self._feishu_disconnect_btn = QPushButton("断开")
+        self._feishu_disconnect_btn.setStyleSheet(
+            f"QPushButton {{ background: {DARK_SURFACE}; color: #ff6b8a; "
+            f"border: 1px solid {DARK_BORDER}; padding: 4px 14px; font-size: 12px; font-weight: normal; }}"
+            f"QPushButton:hover {{ border-color: #ff6b8a; }}"
+        )
+        self._feishu_disconnect_btn.clicked.connect(self._feishu_disconnect)
+        feishu_btn_row.addWidget(self._feishu_disconnect_btn)
+
+        layout.addLayout(feishu_btn_row)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -395,6 +465,12 @@ class SettingsDialog(QDialog):
         if self._has_update:
             self._check_btn.set_badge(True)
 
+        # Feishu settings
+        s = QSettings("InteractiveFeedbackMCP", "Settings")
+        self.feishu_app_id.setText(s.value("feishu_app_id", "", type=str))
+        self.feishu_app_secret.setText(s.value("feishu_app_secret", "", type=str))
+        self._refresh_feishu_status()
+
     def _save_and_close(self):
         total_mins = self.timeout_hours_spin.value() * 60 + self.timeout_mins_spin.value()
         if total_mins < 1:
@@ -412,6 +488,10 @@ class SettingsDialog(QDialog):
             KEY_TIMEOUT_MINUTES: total_mins,
             KEY_AUTO_REPLY_SECONDS: auto_reply_sec,
         })
+        # Feishu credentials
+        s = QSettings("InteractiveFeedbackMCP", "Settings")
+        s.setValue("feishu_app_id", self.feishu_app_id.text().strip())
+        s.setValue("feishu_app_secret", self.feishu_app_secret.text().strip())
         results = sync_mcp_json_timeout(total_mins)
         if results:
             msgs = []
@@ -428,6 +508,97 @@ class SettingsDialog(QDialog):
             self.accept()
             return
         self.accept()
+
+    # ── Feishu methods ──────────────────────────────────────────────────
+
+    def _get_feishu_client(self):
+        try:
+            from feishu_client import FeishuClient
+            client = FeishuClient()
+            # If user typed custom credentials, apply them
+            aid = self.feishu_app_id.text().strip()
+            asec = self.feishu_app_secret.text().strip()
+            if aid:
+                client._app_id = aid
+            if asec:
+                client._app_secret = asec
+            return client
+        except Exception:
+            return None
+
+    def _refresh_feishu_status(self):
+        client = self._get_feishu_client()
+        if client is None:
+            self._feishu_status.setText("飞书模块不可用")
+            self._feishu_status.setStyleSheet("color: #ff6b8a; font-size: 12px;")
+            return
+        status = client.status_text
+        if client.has_user_token:
+            self._feishu_status.setText(f"✅ {status}")
+            self._feishu_status.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
+            self._feishu_disconnect_btn.setVisible(True)
+        elif client.is_configured:
+            self._feishu_status.setText(f"✅ {status}")
+            self._feishu_status.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
+            self._feishu_disconnect_btn.setVisible(bool(client._user_refresh))
+        else:
+            self._feishu_status.setText(status)
+            self._feishu_status.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+            self._feishu_disconnect_btn.setVisible(False)
+
+    def _feishu_oauth(self):
+        s = QSettings("InteractiveFeedbackMCP", "Settings")
+        s.setValue("feishu_app_id", self.feishu_app_id.text().strip())
+        s.setValue("feishu_app_secret", self.feishu_app_secret.text().strip())
+
+        client = self._get_feishu_client()
+        if client is None or not client.is_configured:
+            self._feishu_status.setText("❌ 请先配置 App ID 和 App Secret")
+            self._feishu_status.setStyleSheet("color: #ff6b8a; font-size: 12px;")
+            return
+
+        self._feishu_status.setText("⏳ 正在等待浏览器授权...")
+        self._feishu_status.setStyleSheet(f"color: {ACCENT_BLUE}; font-size: 12px;")
+        self._feishu_connect_btn.setEnabled(False)
+
+        self._oauth_sig = _FeishuOAuthSignal()
+        self._oauth_sig.done.connect(self._feishu_oauth_done)
+
+        port = s.value("feishu_oauth_port", 3000, type=int)
+        sig = self._oauth_sig
+
+        def _on_done(success, msg):
+            sig.done.emit(success, msg)
+
+        client.start_oauth(port=port, callback=_on_done)
+        self._active_feishu_client = client
+
+    def _feishu_oauth_done(self, success, msg):
+        self._feishu_connect_btn.setEnabled(True)
+        if success:
+            self._feishu_status.setText(f"✅ {msg}")
+            self._feishu_status.setStyleSheet(f"color: {ACCENT_GREEN}; font-size: 12px;")
+            self._feishu_disconnect_btn.setVisible(True)
+            # Reload the feishu client in the parent daemon window
+            parent = self.parent()
+            if parent and hasattr(parent, '_feishu_client'):
+                try:
+                    from feishu_client import FeishuClient
+                    parent._feishu_client = FeishuClient()
+                except Exception:
+                    pass
+        else:
+            self._feishu_status.setText(f"❌ {msg}")
+            self._feishu_status.setStyleSheet("color: #ff6b8a; font-size: 12px;")
+
+    def _feishu_disconnect(self):
+        client = self._get_feishu_client()
+        if client:
+            client.disconnect()
+        self._refresh_feishu_status()
+        parent = self.parent()
+        if parent and hasattr(parent, '_feishu_client') and parent._feishu_client:
+            parent._feishu_client.disconnect()
 
     def _do_check_update(self):
         self._update_label.setText("正在检查...")

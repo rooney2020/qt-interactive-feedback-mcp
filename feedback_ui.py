@@ -28,6 +28,7 @@ from settings_dialog import (
 class FeedbackResult(TypedDict):
     interactive_feedback: str
     images: List[str]
+    mentioned_entities: List[dict]
 
 
 DARK_BG = "#1e1e2e"
@@ -161,10 +162,30 @@ class ClickableCheckBox(QCheckBox):
 class FeedbackTextEdit(QTextEdit):
     image_pasted = Signal(QImage)
     submit_requested = Signal()
+    at_typed = Signal()  # emitted when user types '@'
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_InputMethodEnabled, True)
+        self._mention_tracker = None
+        self._suppress_at_detect = False
+        self._prev_text = ""
+        self.textChanged.connect(self._check_at_input)
+
+    def set_mention_tracker(self, tracker):
+        self._mention_tracker = tracker
+
+    def _check_at_input(self):
+        if self._suppress_at_detect:
+            return
+        text = self.toPlainText()
+        if len(text) > len(self._prev_text):
+            new_part = text[len(self._prev_text):]
+            if "@" in new_part:
+                self._prev_text = text
+                self.at_typed.emit()
+                return
+        self._prev_text = text
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
@@ -176,6 +197,11 @@ class FeedbackTextEdit(QTextEdit):
                 if not image.isNull():
                     self.image_pasted.emit(image)
                     return
+            super().keyPressEvent(event)
+        elif event.key() == Qt.Key_Backspace and self._mention_tracker:
+            from mention_completer import MentionTracker
+            if MentionTracker.handle_backspace(self):
+                return
             super().keyPressEvent(event)
         else:
             super().keyPressEvent(event)
@@ -281,7 +307,25 @@ class FeedbackContentWidget(QWidget):
         self.screenshots: List[QPixmap] = []
         self._countdown_total = countdown_seconds
         self._countdown_remaining = countdown_seconds
+        self._feishu_client = None
+        self._mention_tracker = None
         self._create_ui()
+
+    def set_feishu_client(self, client):
+        """Connect a FeishuClient for @ mention support."""
+        if client is None:
+            return
+        try:
+            from mention_completer import MentionTracker
+            self._feishu_client = client
+            self._mention_tracker = MentionTracker()
+            if hasattr(self, 'feedback_text'):
+                self.feedback_text.set_mention_tracker(self._mention_tracker)
+            if hasattr(self, '_mention_btn'):
+                self._mention_btn.setVisible(True)
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
     def _create_ui(self):
         main_layout = QVBoxLayout(self)
@@ -365,12 +409,21 @@ class FeedbackContentWidget(QWidget):
         self.img_count_label.setVisible(False)
         feedback_header.addWidget(self.img_count_label)
 
-        add_img_btn = QPushButton("\U0001f4ce \u6dfb\u52a0\u56fe\u7247")
-        add_img_btn.setStyleSheet(
+        _action_btn_style = (
             f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
             f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 3px 10px; font-size: 11px; }}"
             f"QPushButton:hover {{ background: rgba(255,255,255,0.05); color: {TEXT_PRIMARY}; border-color: {ACCENT_BLUE}; }}"
         )
+
+        self._mention_btn = QPushButton("@ \u63d0\u53ca")
+        self._mention_btn.setStyleSheet(_action_btn_style)
+        self._mention_btn.setToolTip("\u641c\u7d22\u98de\u4e66\u7528\u6237/\u7fa4/\u90e8\u95e8")
+        self._mention_btn.clicked.connect(self._open_mention_dialog)
+        self._mention_btn.setVisible(False)
+        feedback_header.addWidget(self._mention_btn)
+
+        add_img_btn = QPushButton("\U0001f4ce \u6dfb\u52a0\u56fe\u7247")
+        add_img_btn.setStyleSheet(_action_btn_style)
         add_img_btn.clicked.connect(self._browse_image)
         feedback_header.addWidget(add_img_btn)
         main_layout.addLayout(feedback_header)
@@ -378,6 +431,7 @@ class FeedbackContentWidget(QWidget):
         self.feedback_text = FeedbackTextEdit()
         self.feedback_text.image_pasted.connect(self._on_image_pasted)
         self.feedback_text.submit_requested.connect(self._submit_feedback)
+        self.feedback_text.at_typed.connect(self._on_at_typed)
         font_metrics = self.feedback_text.fontMetrics()
         row_height = font_metrics.height()
         padding = self.feedback_text.contentsMargins().top() + self.feedback_text.contentsMargins().bottom() + 5
@@ -460,6 +514,41 @@ class FeedbackContentWidget(QWidget):
         for cb in self.option_checkboxes:
             cb.toggled.connect(self._update_submit_state)
         self._update_submit_state()
+
+    def _on_at_typed(self):
+        """Triggered when user types '@' — open mention dialog if feishu is connected."""
+        if not self._feishu_client:
+            return
+        cursor = self.feedback_text.textCursor()
+        pos = cursor.position()
+        if pos > 0:
+            check = self.feedback_text.toPlainText()
+            if check[pos - 1:pos] == "@":
+                cursor.setPosition(pos - 1)
+                cursor.setPosition(pos, cursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+                self.feedback_text.setTextCursor(cursor)
+        self._open_mention_dialog()
+
+    def _open_mention_dialog(self):
+        if not self._feishu_client:
+            return
+        try:
+            from mention_completer import MentionDialog
+            self.feedback_text._suppress_at_detect = True
+            dlg = MentionDialog(self._feishu_client, self)
+            dlg.mention_selected.connect(self._on_mention_selected)
+            dlg.exec()
+            self.feedback_text._suppress_at_detect = False
+            self.feedback_text._prev_text = self.feedback_text.toPlainText()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            self.feedback_text._suppress_at_detect = False
+
+    def _on_mention_selected(self, entity: dict):
+        if self._mention_tracker:
+            self._mention_tracker.insert_mention(self.feedback_text, entity)
 
     def _on_image_pasted(self, image: QImage):
         pixmap = QPixmap.fromImage(image)
@@ -566,9 +655,17 @@ class FeedbackContentWidget(QWidget):
 
         images_b64 = [self._pixmap_to_base64(p) for p in self.screenshots]
 
+        mentioned = []
+        if self._mention_tracker:
+            mentioned = self._mention_tracker.get_mentioned_entities(
+                self.feedback_text.toPlainText()
+            )
+            self._mention_tracker.clear()
+
         result = FeedbackResult(
             interactive_feedback=final_feedback,
             images=images_b64,
+            mentioned_entities=mentioned,
         )
         self._stop_countdown()
         self.feedback_submitted.emit(result)
@@ -679,7 +776,7 @@ class FeedbackUI(QMainWindow):
         QApplication.instance().exec()
 
         if not self.feedback_result:
-            return FeedbackResult(interactive_feedback="", images=[])
+            return FeedbackResult(interactive_feedback="", images=[], mentioned_entities=[])
 
         return self.feedback_result
 

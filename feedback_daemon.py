@@ -177,6 +177,17 @@ class DaemonWindow(QMainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
+        self._feishu_client = None
+        try:
+            from feishu_client import FeishuClient
+            self._feishu_client = FeishuClient()
+            if self._feishu_client.is_configured:
+                _log(f"FeishuClient loaded: {self._feishu_client.status_text}")
+            else:
+                _log("FeishuClient: not configured (app_id/app_secret not found)")
+        except Exception as e:
+            _log(f"FeishuClient init failed (non-fatal): {e}")
+
         self._settings = QSettings("InteractiveFeedbackMCP", "FeedbackDaemon")
         geo = self._settings.value("daemon_geometry")
         if geo:
@@ -268,6 +279,8 @@ class DaemonWindow(QMainWindow):
 
             tab = FeedbackContentWidget(message, options, countdown_seconds=countdown)
             tab.setProperty("session_id", session_id)
+            if self._feishu_client:
+                tab.set_feishu_client(self._feishu_client)
             tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))
 
             index = self.tabs.addTab(tab, tab_title)

@@ -39,6 +39,13 @@
 - Linux daemon 模式下支持**系统托盘图标**，右键菜单可随时进入设置、显示窗口或退出
 - 可配置项：默认"使用中文"/"重新读取Rules"勾选状态、启动时检查更新、自定义追加文本
 
+### 💬 飞书集成（@ 提及）
+- 在反馈输入框中输入 `@` 触发飞书搜索弹窗
+- 支持搜索 **用户** / **群聊** / **部门**（300ms 防抖、并发查询）
+- 选择后自动插入 `@名称` 高亮标记，提交时将 `open_id` / `chat_id` / `department_id` 传递给 Agent
+- 通过 OAuth 2.0 授权码流程获取 `user_access_token`，支持自动刷新
+- 自动复用 `~/.cursor/mcp.json` 中 `lark-mcp` 的 `app_id` / `app_secret`，也可在设置页手动配置
+
 ### 🔄 版本检查
 - 自动对比本地 `VERSION` 文件与 GitHub 远程版本
 - daemon 启动时自动检查（可在设置中关闭），有新版本通过系统通知提示
@@ -216,6 +223,36 @@ cd /path/to/interactive-feedback-mcp
 bash setup.sh
 ```
 
+### 4. 飞书集成配置（可选）
+
+在反馈窗口中使用 `@` 提及飞书用户/群/部门，需要以下配置：
+
+#### 飞书开放平台
+
+1. 在 [飞书开放平台](https://open.feishu.cn/) 创建或使用已有的企业自建应用
+2. 添加重定向 URI：`http://localhost:3000/callback`（安全设置 → 重定向 URL；如果已配置 lark-mcp 的 OAuth，此步可能已完成）
+3. 申请并开通以下权限：
+
+| 权限 | 说明 |
+|------|------|
+| `search:user` | 搜索用户 |
+| `contact:user.base:readonly` | 读取用户基本信息 |
+| `im:chat:readonly` | 搜索群聊 |
+| `contact:department.base:readonly` | 搜索部门 |
+
+#### 凭据配置
+
+程序会自动从 `~/.cursor/mcp.json` 中读取 `lark-mcp` 配置的 `app_id` / `app_secret`。如果没有使用 `lark-mcp`，也可以在设置页面手动填写。
+
+#### 连接飞书
+
+1. 打开设置页面（⚙ 按钮）
+2. 在「飞书集成」区域点击「连接飞书」
+3. 在弹出的浏览器页面中完成飞书登录授权
+4. 授权成功后即可在反馈输入框中使用 `@` 搜索
+
+> Token 会保存在本地，支持自动刷新。如需切换账号，点击「断开」后重新连接。
+
 ## 🛠️ MCP 工具
 
 | 工具 | 描述 |
@@ -233,6 +270,7 @@ bash setup.sh
 
 - 文字反馈：`{"interactive_feedback": "用户输入的内容"}`
 - 带截图：返回包含文字和 MCP Image 对象的列表
+- 如果用户在反馈中 @ 了飞书实体，文本末尾会附加结构化信息：`[Mentioned entities: - user: 张三 (id=ou_xxx)]`
 
 ## 📋 快捷键
 
