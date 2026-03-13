@@ -52,9 +52,9 @@
 - 设置页面内可手动点击"检查更新"
 
 ### 🪟 多 Agent 并行
-- 基于文件锁（`fcntl`）的全局窗口 ID 管理
-- 不同 Cursor 项目/会话的窗口自动分配不同编号
-- 窗口关闭后编号自动释放
+- Linux daemon 模式：多个 agent 共享同一窗口，每个 agent 一个 tab
+- 基于 MCP server PID（`mcp_pid`）自动识别同一 agent 的多次调用，复用 tab 而非重复创建
+- Windows / fallback 模式：基于文件锁的窗口 ID 管理
 
 ## 📦 安装
 
@@ -265,6 +265,7 @@ bash setup.sh
 |------|------|------|
 | `message` | string | 显示给用户的消息/问题 |
 | `predefined_options` | list | 预定义选项列表（可选） |
+| `tab_title` | string | Tab 标签页标题，用于区分不同会话（可选） |
 
 ### 返回值
 

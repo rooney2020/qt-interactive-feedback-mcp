@@ -263,6 +263,26 @@ class DaemonWindow(QMainWindow):
         except Exception as e:
             _log(f"CRITICAL: _poll_requests exception: {e}")
 
+    def _close_tabs_by_mcp_pid(self, mcp_pid: int):
+        """Close all tabs belonging to the same MCP server process (agent session)."""
+        to_remove = []
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if isinstance(tab, FeedbackContentWidget) and tab.property("mcp_pid") == mcp_pid:
+                to_remove.append((i, tab))
+
+        for idx, tab in reversed(to_remove):
+            old_sid = tab.property("session_id")
+            if old_sid:
+                self._session_tabs.pop(old_sid, None)
+                response_dict[old_sid] = {"interactive_feedback": "[心跳]", "images": []}
+                evt = response_events.pop(old_sid, None)
+                if evt:
+                    evt.set()
+            self.tabs.removeTab(idx)
+            tab.deleteLater()
+            _log(f"Replaced tab from mcp_pid={mcp_pid} (old session {old_sid})")
+
     def _add_tab(self, data: dict):
         session_id = data.get("session_id", "unknown")
         try:
@@ -270,15 +290,19 @@ class DaemonWindow(QMainWindow):
             message = data.get("message", "")
             options = data.get("predefined_options") or None
             tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
-            countdown = data.get("countdown_seconds", 0)
+            mcp_pid = data.get("mcp_pid", 0)
 
             if isinstance(options, list):
                 options = [str(o) for o in options if o]
                 if not options:
                     options = None
 
-            tab = FeedbackContentWidget(message, options, countdown_seconds=countdown)
+            if mcp_pid:
+                self._close_tabs_by_mcp_pid(mcp_pid)
+
+            tab = FeedbackContentWidget(message, options)
             tab.setProperty("session_id", session_id)
+            tab.setProperty("mcp_pid", mcp_pid)
             if self._feishu_client:
                 tab.set_feishu_client(self._feishu_client)
             tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))
