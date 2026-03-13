@@ -263,8 +263,10 @@ class DaemonWindow(QMainWindow):
         except Exception as e:
             _log(f"CRITICAL: _poll_requests exception: {e}")
 
-    def _close_tabs_by_mcp_pid(self, mcp_pid: int):
-        """Close all tabs belonging to the same MCP server process (agent session)."""
+    def _close_tabs_by_mcp_pid(self, mcp_pid: int) -> bool:
+        """Close all tabs belonging to the same MCP server process (agent session).
+        Silently discards old sessions without sending [心跳] to avoid retry loops.
+        Returns True if any tabs were replaced."""
         to_remove = []
         for i in range(self.tabs.count()):
             tab = self.tabs.widget(i)
@@ -275,18 +277,17 @@ class DaemonWindow(QMainWindow):
             old_sid = tab.property("session_id")
             if old_sid:
                 self._session_tabs.pop(old_sid, None)
-                response_dict[old_sid] = {"interactive_feedback": "[心跳]", "images": []}
-                evt = response_events.pop(old_sid, None)
-                if evt:
-                    evt.set()
+                response_events.pop(old_sid, None)
             self.tabs.removeTab(idx)
             tab.deleteLater()
             _log(f"Replaced tab from mcp_pid={mcp_pid} (old session {old_sid})")
 
+        return len(to_remove) > 0
+
     def _add_tab(self, data: dict):
         session_id = data.get("session_id", "unknown")
         try:
-            _log(f"Adding new tab for session {session_id}")
+            _log(f"Adding new tab for session {session_id}, mcp_pid={data.get('mcp_pid', 0)}, title={data.get('tab_title', '')}")
             message = data.get("message", "")
             options = data.get("predefined_options") or None
             tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
@@ -298,8 +299,9 @@ class DaemonWindow(QMainWindow):
                 if not options:
                     options = None
 
+            had_existing = False
             if mcp_pid:
-                self._close_tabs_by_mcp_pid(mcp_pid)
+                had_existing = self._close_tabs_by_mcp_pid(mcp_pid)
 
             tab = FeedbackContentWidget(message, options, countdown_seconds=countdown)
             tab.setProperty("session_id", session_id)
@@ -312,10 +314,11 @@ class DaemonWindow(QMainWindow):
             self.tabs.setCurrentIndex(index)
             self._session_tabs[session_id] = tab
 
-            self.setVisible(True)
-            self.showNormal()
-            self.activateWindow()
-            self.raise_()
+            if not had_existing:
+                self.setVisible(True)
+                self.showNormal()
+                self.activateWindow()
+                self.raise_()
 
             self._activate_input_method()
         except Exception as e:
