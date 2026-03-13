@@ -259,13 +259,14 @@ class DaemonWindow(QMainWindow):
             message = data.get("message", "")
             options = data.get("predefined_options") or None
             tab_title = data.get("tab_title", f"\u4f1a\u8bdd #{session_id[:6]}")
+            countdown = data.get("countdown_seconds", 0)
 
             if isinstance(options, list):
                 options = [str(o) for o in options if o]
                 if not options:
                     options = None
 
-            tab = FeedbackContentWidget(message, options)
+            tab = FeedbackContentWidget(message, options, countdown_seconds=countdown)
             tab.setProperty("session_id", session_id)
             tab.feedback_submitted.connect(lambda result, sid=session_id: self._on_tab_submitted(sid, result))
 
