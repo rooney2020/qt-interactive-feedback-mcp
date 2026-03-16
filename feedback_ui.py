@@ -788,6 +788,14 @@ class FeedbackUI(QMainWindow):
         self.content.feedback_submitted.connect(self._on_submitted)
         self.setCentralWidget(self.content)
 
+        try:
+            from feishu_client import FeishuClient
+            client = FeishuClient()
+            if client.is_configured:
+                self.content.set_feishu_client(client)
+        except Exception:
+            pass
+
     def _on_submitted(self, result):
         self.feedback_result = result
         self.close()

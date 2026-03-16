@@ -202,18 +202,7 @@ class DaemonWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self.setCentralWidget(self.tabs)
 
-        # Tab bar corner: settings button
-        self._corner_btn = BadgePushButton("⚙")
-        self._corner_btn.setFixedSize(28, 28)
-        self._corner_btn.setToolTip("设置")
-        self._corner_btn_style_normal = (
-            f"QPushButton {{ background: transparent; color: {TEXT_SECONDARY}; "
-            f"border: none; font-size: 16px; padding: 0; }}"
-            f"QPushButton:hover {{ color: {TEXT_PRIMARY}; }}"
-        )
-        self._corner_btn.setStyleSheet(self._corner_btn_style_normal)
-        self._corner_btn.clicked.connect(self._open_settings)
-        self.tabs.setCornerWidget(self._corner_btn, Qt.TopRightCorner)
+        # Corner widget removed — settings accessible from bottom bar ⚙ button
 
         self._session_tabs: Dict[str, FeedbackContentWidget] = {}
 
@@ -463,9 +452,6 @@ class DaemonWindow(QMainWindow):
                 self._tray.setToolTip(f"MCP 反馈助手 - {update_msg}")
                 self._tray.showMessage("MCP 反馈助手", update_msg,
                     QSystemTrayIcon.MessageIcon.Information, 8000)
-            # Red badge on corner settings button and window icon
-            self._corner_btn.set_badge(True)
-            self._corner_btn.setToolTip(f"设置 - {update_msg}")
             if hasattr(self, '_tray_base_icon'):
                 self.setWindowIcon(_icon_with_badge(self._tray_base_icon, 256))
             _log(f"Version update notification sent")
