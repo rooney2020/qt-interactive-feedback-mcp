@@ -73,10 +73,11 @@ interactive_feedback(summary) → [内部 progress notification 保活] → 用�
 
 ### tab_id（会话唯一标识）
 
-- **首次调用时生成一个随机 UUID**（如 `550e8400-e29b-41d4-a716-446655440000`）
+- **首次调用时必须随机生成一个全新的 UUID**（使用 UUID v4 随机生成，**严禁使用文档中的示例 UUID**）
 - **同一会话中所有调用必须使用相同的 `tab_id`**
 - `tab_id` 用于去重：同一 `tab_id` 的新请求会自动替换旧 tab
 - **不同会话必须使用不同的 `tab_id`**
+- **禁止**直接复制文档示例中的 UUID，必须每次随机生成
 
 ### tab_title（显示标题）
 
@@ -89,8 +90,9 @@ interactive_feedback(summary) → [内部 progress notification 保活] → 用�
 ### 示例
 
 ```json
-{"message": "...", "tab_id": "550e8400-e29b-41d4-a716-446655440000", "tab_title": "日报填写", "predefined_options": [...]}
-{"message": "...", "tab_id": "550e8400-e29b-41d4-a716-446655440000", "tab_title": "日报填写", "predefined_options": [...]}
+// 注意：下方 tab_id 仅为格式示例，实际使用时必须随机生成新的 UUID，严禁直接复制！
+{"message": "...", "tab_id": "<随机生成的UUID>", "tab_title": "日报填写", "predefined_options": [...]}
+{"message": "...", "tab_id": "<同一会话使用相同UUID>", "tab_title": "日报填写", "predefined_options": [...]}
 ```
 
 ## 必须调用交互工具的场景
@@ -126,6 +128,18 @@ interactive_feedback(summary) → [内部 progress notification 保活] → 用�
 1. 当 `AskQuestion` 被跳过或异常返回后，立即尝试 `interactive_feedback`
 2. 循环直到成功建立交互或用户手动发送消息
 
+## 选项标识规则（必须遵守）
+
+无论使用 `interactive_feedback` 还是 `AskQuestion`，给出预定义选项时**必须遵守以下规则**：
+
+1. **标识结束选项**：如果某个选项会导致会话结束，必须在选项文本末尾标注 `【结束会话】`
+   - 示例：`"先这样，结束会话 【结束会话】"`、`"完成，不需要其他操作 【结束会话】"`
+2. **提供工具切换选项**：在选项列表中，**必须提供一个切换到另一种交互工具的选项**
+   - 使用 `interactive_feedback` 时，提供选项：`"切换到 AskQuestion"`
+   - 使用 `AskQuestion` 时，提供选项：`"切换到 Feedback"`
+   - 此选项用于用户主动切换交互方式，不受失败次数限制
+3. **不标注的选项默认不会结束会话**：只有明确标注了 `【结束会话】` 的选项才会结束
+
 ## 禁止行为
 
 - **禁止**在会话中直接结束对话或输出最终结果后停止
@@ -135,6 +149,8 @@ interactive_feedback(summary) → [内部 progress notification 保活] → 用�
 - **禁止**擅自开启新 Agent 会话
 - **禁止**用户明确表示暂时离开时调用 interactive_feedback（会导致超时浪费请求）
 - **禁止**收到心跳后输出文字或降级到 AskQuestion
+- **禁止**给出选项时不标识哪个选项会结束会话
+- **禁止**给出选项时不提供工具切换选项
 
 ## 重要提醒
 
@@ -142,3 +158,4 @@ interactive_feedback(summary) → [内部 progress notification 保活] → 用�
 - 循环直到用户明确说"完成"/"可以了"/"结束"
 - **所有交互优先 `interactive_feedback`，连续失败 3 次后才降级**
 - 收到 `[心跳]` 消息后立即静默重新调用，不输出任何文字
+- **给出选项时必须标识结束选项和提供工具切换选项**

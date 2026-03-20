@@ -49,6 +49,27 @@ _CHECK_ICON = os.path.join(_SCRIPT_DIR, "images", "check-blue.svg").replace("\\"
 _CLOSE_ICON = os.path.join(_SCRIPT_DIR, "images", "close.svg").replace("\\", "/")
 _CLOSE_HOVER_ICON = os.path.join(_SCRIPT_DIR, "images", "close-hover.svg").replace("\\", "/")
 
+SCROLLBAR_STYLE = f"""
+QScrollBar:vertical {{
+    background: transparent; width: 6px; margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {DARK_BORDER}; min-height: 20px; border-radius: 3px;
+}}
+QScrollBar::handle:vertical:hover {{ background: #4a4a6a; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+QScrollBar:horizontal {{
+    background: transparent; height: 6px; margin: 0;
+}}
+QScrollBar::handle:horizontal {{
+    background: {DARK_BORDER}; min-width: 20px; border-radius: 3px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: #4a4a6a; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
+"""
+
 GLOBAL_STYLE = f"""
 QMainWindow {{
     background-color: {DARK_BG};
@@ -57,6 +78,7 @@ QWidget {{
     color: {TEXT_PRIMARY};
     font-size: 13px;
 }}
+{SCROLLBAR_STYLE}
 QGroupBox {{
     background-color: transparent;
     border: none;
@@ -185,6 +207,12 @@ class FeedbackTextEdit(QTextEdit):
                 self.at_typed.emit()
                 return
         self._prev_text = text
+
+    def insertFromMimeData(self, source):
+        if source.hasText():
+            self.textCursor().insertText(source.text())
+        else:
+            super().insertFromMimeData(source)
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
@@ -359,7 +387,16 @@ class FeedbackContentWidget(QWidget):
         main_layout.addWidget(summary_title)
 
         self.description_text = QTextEdit()
-        self.description_text.setPlainText(self.prompt)
+        self.description_text.document().setDefaultStyleSheet(
+            f"h1, h2, h3, h4 {{ color: {ACCENT_BLUE}; margin: 4px 0; }}"
+            f"code {{ background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-family: monospace; }}"
+            f"pre {{ background: rgba(255,255,255,0.06); padding: 8px; border-radius: 4px; }}"
+            f"a {{ color: {ACCENT_BLUE}; }}"
+            f"ul, ol {{ margin: 4px 0; padding-left: 20px; }}"
+            f"li {{ margin: 2px 0; }}"
+            f"strong {{ color: {TEXT_PRIMARY}; }}"
+        )
+        self.description_text.setMarkdown(self.prompt)
         self.description_text.setReadOnly(True)
         self.description_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.description_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -381,8 +418,7 @@ class FeedbackContentWidget(QWidget):
 
             options_container = QFrame()
             options_container.setStyleSheet(
-                f"QFrame {{ background-color: {DARK_SURFACE}; "
-                f"border: 1px solid {DARK_BORDER}; border-radius: 6px; }}"
+                f"QFrame {{ background-color: transparent; border: none; }}"
             )
             options_layout = QVBoxLayout(options_container)
             options_layout.setContentsMargins(10, 8, 10, 8)
@@ -391,7 +427,17 @@ class FeedbackContentWidget(QWidget):
                 checkbox = ClickableCheckBox(option)
                 self.option_checkboxes.append(checkbox)
                 options_layout.addWidget(checkbox)
-            main_layout.addWidget(options_container)
+
+            options_scroll = QScrollArea()
+            options_scroll.setWidgetResizable(True)
+            options_scroll.setWidget(options_container)
+            options_scroll.setMaximumHeight(200)
+            options_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            options_scroll.setStyleSheet(
+                f"QScrollArea {{ background-color: {DARK_SURFACE}; "
+                f"border: 1px solid {DARK_BORDER}; border-radius: 6px; }}"
+            )
+            main_layout.addWidget(options_scroll)
 
         feedback_header = QHBoxLayout()
         feedback_title = QLabel("\U0001f4dd \u60a8\u7684\u53cd\u9988")
