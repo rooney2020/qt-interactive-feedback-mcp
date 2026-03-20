@@ -387,18 +387,22 @@ class FeedbackContentWidget(QWidget):
         main_layout.addWidget(summary_title)
 
         self.description_text = QTextEdit()
+        from PySide6.QtGui import QFont
+        doc_font = self.description_text.font()
+        doc_font.setPointSize(9)
+        self.description_text.document().setDefaultFont(doc_font)
         self.description_text.document().setDefaultStyleSheet(
-            f"body {{ font-size: 13px; color: {TEXT_PRIMARY}; }}"
-            f"h1 {{ color: {ACCENT_BLUE}; font-size: 16px; margin: 6px 0 4px 0; }}"
-            f"h2 {{ color: {ACCENT_BLUE}; font-size: 15px; margin: 6px 0 4px 0; }}"
-            f"h3 {{ color: {ACCENT_BLUE}; font-size: 14px; margin: 4px 0 2px 0; }}"
-            f"h4 {{ color: {ACCENT_BLUE}; font-size: 13px; margin: 4px 0 2px 0; }}"
-            f"p {{ font-size: 13px; margin: 2px 0; }}"
-            f"code {{ background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-family: monospace; font-size: 12px; }}"
-            f"pre {{ background: rgba(255,255,255,0.06); padding: 8px; border-radius: 4px; font-size: 12px; }}"
+            f"body {{ color: {TEXT_PRIMARY}; line-height: 1.3; }}"
+            f"h1 {{ color: {ACCENT_BLUE}; font-size: 13px; font-weight: bold; margin: 4px 0 2px 0; }}"
+            f"h2 {{ color: {ACCENT_BLUE}; font-size: 12px; font-weight: bold; margin: 4px 0 2px 0; }}"
+            f"h3 {{ color: {ACCENT_BLUE}; font-size: 11px; font-weight: bold; margin: 2px 0 1px 0; }}"
+            f"h4 {{ color: {ACCENT_BLUE}; font-size: 11px; font-weight: bold; margin: 2px 0 1px 0; }}"
+            f"p {{ margin: 1px 0; }}"
+            f"code {{ background: rgba(255,255,255,0.1); padding: 1px 3px; border-radius: 3px; font-family: monospace; }}"
+            f"pre {{ background: rgba(255,255,255,0.06); padding: 6px; border-radius: 4px; }}"
             f"a {{ color: {ACCENT_BLUE}; }}"
-            f"ul, ol {{ margin: 2px 0; padding-left: 20px; font-size: 13px; }}"
-            f"li {{ margin: 1px 0; font-size: 13px; }}"
+            f"ul, ol {{ margin: 1px 0; padding-left: 18px; }}"
+            f"li {{ margin: 0; }}"
             f"strong {{ color: {TEXT_PRIMARY}; }}"
         )
         self.description_text.setMarkdown(self.prompt)
