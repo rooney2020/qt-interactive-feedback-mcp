@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "bash ./scripts/check_feedback_gate.sh",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "bash ./scripts/check_feedback_gate.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}

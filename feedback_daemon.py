@@ -55,6 +55,7 @@ request_queue: queue.Queue = queue.Queue()
 close_queue: queue.Queue = queue.Queue()
 response_dict: Dict[str, dict] = {}
 response_events: Dict[str, threading.Event] = {}
+_DUPLICATE_TAB_REPLY = "由于多个相同id的feedback调用，本次调用被忽略，请查看另一个调用的返回值"
 
 
 def _recv_json(conn: socket.socket) -> dict:
@@ -254,7 +255,7 @@ class DaemonWindow(QMainWindow):
 
     def _close_tabs_by_tab_id(self, tab_id: str) -> bool:
         """Close all tabs belonging to the same agent session (identified by tab_id).
-        Silently discards old sessions without sending [心跳] to avoid retry loops.
+        Replaced sessions receive an explicit auto-reply so callers can stop waiting.
         Returns True if any tabs were replaced."""
         if not tab_id:
             return False
@@ -268,7 +269,13 @@ class DaemonWindow(QMainWindow):
             old_sid = tab.property("session_id")
             if old_sid:
                 self._session_tabs.pop(old_sid, None)
-                response_events.pop(old_sid, None)
+                response_dict[old_sid] = {
+                    "interactive_feedback": _DUPLICATE_TAB_REPLY,
+                    "images": [],
+                }
+                evt = response_events.pop(old_sid, None)
+                if evt:
+                    evt.set()
             self.tabs.removeTab(idx)
             tab.deleteLater()
             _log(f"Replaced tab for tab_id={tab_id} (old session {old_sid})")

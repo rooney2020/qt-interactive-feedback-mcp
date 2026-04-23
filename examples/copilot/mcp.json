@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "interactive-feedback": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/Interactive-Feedback-With-Capture-MCP",
+        "run",
+        "server.py"
+      ],
+      "timeout": 43200,
+      "autoApprove": [
+        "interactive_feedback"
+      ]
+    }
+  }
+}

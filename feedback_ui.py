@@ -6,7 +6,9 @@ import os
 import sys
 import json
 import argparse
+import re
 import subprocess
+import textwrap
 from typing import TypedDict, Optional, List
 
 from PySide6.QtWidgets import (
@@ -20,7 +22,7 @@ from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage
 from settings_dialog import (
     SettingsDialog, load_settings, load_quick_replies, is_quick_reply_auto_submit,
     KEY_CHINESE_DEFAULT, KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX,
-    BadgePushButton, has_update_flag, AUTO_REPLY_MESSAGE,
+    BadgePushButton, has_update_flag, get_auto_reply_message,
 )
 
 
@@ -42,6 +44,45 @@ BTN_SUBMIT_BG = "#4a9eff"
 BTN_SUBMIT_HOVER = "#5ab0ff"
 BTN_CANCEL_BG = "#ff6b8a"
 BTN_CANCEL_HOVER = "#ff8da6"
+
+
+def _normalize_markdown_prompt(text: str) -> str:
+    """Normalize prompt text so Qt Markdown renders split list items consistently."""
+    if not text:
+        return ""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = textwrap.dedent(normalized).strip("\n")
+
+    lines = normalized.split("\n")
+    merged: List[str] = []
+    pending_marker: Optional[str] = None
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        marker_match = re.match(r"^(\s*(?:\d+\.|[-*+])\s*)$", line)
+
+        if marker_match:
+            if pending_marker is not None:
+                merged.append(pending_marker.rstrip())
+            pending_marker = marker_match.group(1).strip() + " "
+            continue
+
+        if pending_marker is not None:
+            if line.strip():
+                merged.append(pending_marker + line.lstrip())
+                pending_marker = None
+                continue
+
+            merged.append(pending_marker.rstrip())
+            pending_marker = None
+
+        merged.append(line)
+
+    if pending_marker is not None:
+        merged.append(pending_marker.rstrip())
+
+    return "\n".join(merged)
 
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -329,7 +370,7 @@ class FeedbackContentWidget(QWidget):
     def __init__(self, prompt: str, predefined_options: Optional[List[str]] = None,
                  countdown_seconds: int = 0, parent=None):
         super().__init__(parent)
-        self.prompt = prompt
+        self.prompt = _normalize_markdown_prompt(prompt)
         self.predefined_options = predefined_options or []
         self.screenshots: List[QPixmap] = []
         self._feishu_client = None
@@ -796,7 +837,7 @@ class FeedbackContentWidget(QWidget):
 
     def _auto_submit_heartbeat(self):
         result = FeedbackResult(
-            interactive_feedback=AUTO_REPLY_MESSAGE,
+            interactive_feedback=get_auto_reply_message(),
             images=[],
             mentioned_entities=[],
         )

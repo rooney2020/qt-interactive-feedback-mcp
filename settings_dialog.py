@@ -102,13 +102,15 @@ KEY_REREAD_RULES_DEFAULT = "reread_rules_default"
 KEY_CHECK_UPDATE = "check_update_on_start"
 KEY_CUSTOM_SUFFIX = "custom_suffix_text"
 KEY_TIMEOUT_MINUTES = "timeout_minutes"
+KEY_AUTO_REPLY_MESSAGE = "auto_reply_message"
 KEY_HAS_UPDATE = "has_update"
 KEY_QUICK_REPLIES = "quick_replies"
 KEY_QR_AUTO_SUBMIT = "quick_reply_auto_submit"
 
 DEFAULT_TIMEOUT_MINUTES = 720  # 12 hours
 DEFAULT_AUTO_REPLY_SECONDS = 3000
-AUTO_REPLY_MESSAGE = "[自动回复] 用户暂未响应，请继续或稍后重试。"
+DEFAULT_AUTO_REPLY_MESSAGE = "请重新发起feedback调用，禁止自动结束会话，必须等待用户的明确指令！"
+AUTO_REPLY_MESSAGE = DEFAULT_AUTO_REPLY_MESSAGE
 
 
 def load_settings() -> dict:
@@ -119,6 +121,7 @@ def load_settings() -> dict:
         KEY_CHECK_UPDATE: s.value(KEY_CHECK_UPDATE, True, type=bool),
         KEY_CUSTOM_SUFFIX: s.value(KEY_CUSTOM_SUFFIX, "", type=str),
         KEY_TIMEOUT_MINUTES: s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int),
+        KEY_AUTO_REPLY_MESSAGE: get_auto_reply_message(),
     }
 
 
@@ -173,6 +176,13 @@ def get_soft_timeout() -> int:
 def get_auto_reply_seconds() -> int:
     s = QSettings(SETTINGS_ORG, SETTINGS_APP)
     return s.value("auto_reply_seconds", DEFAULT_AUTO_REPLY_SECONDS, type=int)
+
+
+def get_auto_reply_message() -> str:
+    s = QSettings(SETTINGS_ORG, SETTINGS_APP)
+    message = s.value(KEY_AUTO_REPLY_MESSAGE, DEFAULT_AUTO_REPLY_MESSAGE, type=str)
+    message = (message or "").strip()
+    return message or DEFAULT_AUTO_REPLY_MESSAGE
 
 
 def _find_mcp_json_paths() -> list:
@@ -391,6 +401,18 @@ class SettingsDialog(QDialog):
         timeout_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
         layout.addWidget(timeout_hint)
 
+        auto_reply_hint = QLabel("倒计时结束后自动提交的反馈内容：")
+        auto_reply_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
+        layout.addWidget(auto_reply_hint)
+
+        auto_reply_wrapper = QHBoxLayout()
+        auto_reply_wrapper.setContentsMargins(_INDENT, 0, 0, 0)
+        self.auto_reply_edit = QTextEdit()
+        self.auto_reply_edit.setMaximumHeight(80)
+        self.auto_reply_edit.setPlaceholderText(DEFAULT_AUTO_REPLY_MESSAGE)
+        auto_reply_wrapper.addWidget(self.auto_reply_edit)
+        layout.addLayout(auto_reply_wrapper)
+
         self._mcp_status_label = QLabel("")
         self._mcp_status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         self._mcp_status_label.setVisible(False)
@@ -594,6 +616,7 @@ class SettingsDialog(QDialog):
         total_mins = data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES)
         self.timeout_hours_spin.setValue(total_mins // 60)
         self.timeout_mins_spin.setValue(total_mins % 60)
+        self.auto_reply_edit.setPlainText(data[KEY_AUTO_REPLY_MESSAGE])
         # Quick replies
         self._quick_replies = load_quick_replies()
         self._qr_auto_submit.setChecked(is_quick_reply_auto_submit())
@@ -615,6 +638,7 @@ class SettingsDialog(QDialog):
             KEY_CHECK_UPDATE: self.cb_update.isChecked(),
             KEY_CUSTOM_SUFFIX: self.suffix_edit.toPlainText().strip(),
             KEY_TIMEOUT_MINUTES: total_mins,
+            KEY_AUTO_REPLY_MESSAGE: self.auto_reply_edit.toPlainText().strip() or DEFAULT_AUTO_REPLY_MESSAGE,
         })
         # Quick replies
         save_quick_replies(self._quick_replies)

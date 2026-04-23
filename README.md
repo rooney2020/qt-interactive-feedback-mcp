@@ -54,7 +54,8 @@
 ### ⚙️ 设置页面
 - 点击底部栏或 Tab 栏右上角的 **⚙ 齿轮按钮** 打开设置
 - Linux daemon 模式下支持**系统托盘图标**，右键菜单可随时进入设置、显示窗口或退出
-- 可配置项：默认"使用中文"/"重新读取Rules"勾选状态、启动时检查更新、自定义追加文本、快捷回复管理
+- 可配置项：默认"使用中文"/"重新读取Rules"勾选状态、启动时检查更新、超时自动回复内容、自定义追加文本、快捷回复管理
+- 超时自动回复文案默认值为：`请重新发起feedback调用，禁止自动结束会话，必须等待用户的明确指令！`
 
 ### 💬 飞书集成（@ 提及）
 - 在反馈输入框中输入 `@` 触发飞书搜索弹窗
@@ -246,7 +247,38 @@ cd /path/to/interactive-feedback-mcp
 bash setup.sh
 ```
 
-### 4. 飞书集成配置（可选）
+## 🤖 GitHub Copilot 配置
+
+如果你在 VS Code / GitHub Copilot 工作流中使用这个 feedback MCP，仓库已经提供了一套可直接复制的示例资产：
+
+```text
+examples/copilot/
+├── .github/
+│   ├── hooks/feedback-stop.json
+│   ├── instructions/feedback-loop.instructions.md
+│   └── skills/feedback-guard/SKILL.md
+├── mcp.json
+└── scripts/
+  ├── check_feedback_gate.sh
+  └── query_feedback_gate_log.py
+```
+
+推荐接入步骤：
+
+1. 将 `examples/copilot/mcp.json` 合并到你的 MCP 配置中，并把其中的仓库路径改成实际路径。
+2. 将 `examples/copilot/.github/instructions/`、`examples/copilot/.github/skills/` 复制到你的项目 `.github/` 目录。
+3. 将 `examples/copilot/.github/hooks/feedback-stop.json` 与 `examples/copilot/scripts/` 复制到你的项目中。
+4. 如果你使用用户级 hooks，也可以把 hook JSON 改写后放到 `~/.copilot/hooks/`，并把脚本路径改成你的实际项目路径。
+
+这些示例的目标是让 Copilot 在两个层面和 feedback MCP 配合工作：
+
+- `mcp.json`：注册 `interactive_feedback` 工具，并把 timeout 固定为 12 小时窗口。
+- instructions / skill：约束 agent 优先使用 feedback，避免无反馈直接收尾。
+- hook：在 `Stop` / `sessionEnd` 阶段检查本轮是否真的完成了 feedback 闭环。
+
+> `examples/copilot/scripts/query_feedback_gate_log.py` 可用于查看 hook 审计日志，便于排查为什么某一轮结束被阻止。
+
+## 💬 飞书集成配置（可选）
 
 在反馈窗口中使用 `@` 提及飞书用户/群/部门，需要以下配置：
 

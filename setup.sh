@@ -243,7 +243,7 @@ if [[ -n "$PROJECT_ROOT" && "$PROJECT_ROOT" != "$SCRIPT_DIR" ]]; then
         "run",
         "server.py"
       ],
-      "timeout": 3600,
+            "timeout": 43200,
       "autoApprove": [
         "interactive_feedback"
       ]
@@ -279,7 +279,7 @@ else
            "run",
            "server.py"
          ],
-         "timeout": 3600,
+                 "timeout": 43200,
          "autoApprove": [
            "interactive_feedback"
          ]
