@@ -14,7 +14,7 @@ from typing import TypedDict, Optional, List
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QCheckBox, QTextEdit, QGroupBox,
-    QFrame, QScrollArea, QFileDialog, QSizePolicy, QMenu, QMessageBox,
+    QFrame, QScrollArea, QFileDialog, QSizePolicy, QMenu, QDialog,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSettings, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage, QTextCursor
@@ -22,6 +22,7 @@ from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage, Q
 from settings_dialog import (
     SettingsDialog, load_settings, load_quick_replies, is_quick_reply_auto_submit,
     KEY_CHINESE_DEFAULT, KEY_REREAD_RULES_DEFAULT, KEY_CUSTOM_SUFFIX,
+    KEY_SUBMIT_SHORTCUT, SUBMIT_SHORTCUT_ENTER, SUBMIT_SHORTCUT_CTRL_ENTER,
     BadgePushButton, has_update_flag, get_auto_reply_message,
 )
 
@@ -232,10 +233,17 @@ class FeedbackTextEdit(QTextEdit):
         self._mention_tracker = None
         self._suppress_at_detect = False
         self._prev_text = ""
+        self._submit_shortcut = SUBMIT_SHORTCUT_CTRL_ENTER
         self.textChanged.connect(self._check_at_input)
 
     def set_mention_tracker(self, tracker):
         self._mention_tracker = tracker
+
+    def set_submit_shortcut(self, submit_shortcut: str):
+        self._submit_shortcut = submit_shortcut if submit_shortcut in {
+            SUBMIT_SHORTCUT_ENTER,
+            SUBMIT_SHORTCUT_CTRL_ENTER,
+        } else SUBMIT_SHORTCUT_CTRL_ENTER
 
     def _check_at_input(self):
         if self._suppress_at_detect:
@@ -256,8 +264,18 @@ class FeedbackTextEdit(QTextEdit):
             super().insertFromMimeData(source)
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
+        is_enter_key = event.key() in (Qt.Key_Return, Qt.Key_Enter)
+        modifiers = event.modifiers()
+        should_submit = False
+        if is_enter_key:
+            if self._submit_shortcut == SUBMIT_SHORTCUT_ENTER:
+                should_submit = modifiers == Qt.NoModifier
+            else:
+                should_submit = modifiers == Qt.ControlModifier
+
+        if should_submit:
             self.submit_requested.emit()
+            return
         elif event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
             clipboard = QApplication.clipboard()
             if clipboard.mimeData() and clipboard.mimeData().hasImage():
@@ -378,6 +396,18 @@ class FeedbackContentWidget(QWidget):
         self._countdown_total = countdown_seconds
         self._countdown_remaining = countdown_seconds
         self._create_ui()
+
+    @staticmethod
+    def _submit_shortcut_hint(submit_shortcut: str) -> str:
+        if submit_shortcut == SUBMIT_SHORTCUT_ENTER:
+            return "Enter 提交，Shift+Enter 换行"
+        return "Ctrl+Enter 提交"
+
+    def _apply_submit_shortcut(self, submit_shortcut: str):
+        self.feedback_text.set_submit_shortcut(submit_shortcut)
+        hint_text = self._submit_shortcut_hint(submit_shortcut)
+        self.feedback_text.setPlaceholderText(f"请输入您的反馈...\n\n{hint_text}")
+        self._submit_hint_label.setText(hint_text)
 
     def set_feishu_client(self, client):
         """Connect a FeishuClient for @ mention support."""
@@ -536,7 +566,6 @@ class FeedbackContentWidget(QWidget):
         row_height = font_metrics.height()
         padding = self.feedback_text.contentsMargins().top() + self.feedback_text.contentsMargins().bottom() + 5
         self.feedback_text.setMinimumHeight(5 * row_height + padding)
-        self.feedback_text.setPlaceholderText("\u8bf7\u8f93\u5165\u60a8\u7684\u53cd\u9988...\n\nCtrl+Enter \u63d0\u4ea4")
         main_layout.addWidget(self.feedback_text)
 
         self.thumbnails_container = QWidget()
@@ -547,9 +576,9 @@ class FeedbackContentWidget(QWidget):
         self.thumbnails_layout.setSpacing(4)
         main_layout.addWidget(self.thumbnails_container)
 
-        hint_label = QLabel("Ctrl+Enter \u63d0\u4ea4")
-        hint_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; padding: 2px 0;")
-        hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._submit_hint_label = QLabel("")
+        self._submit_hint_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; padding: 2px 0;")
+        self._submit_hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         bottom_layout = QHBoxLayout()
 
@@ -566,7 +595,7 @@ class FeedbackContentWidget(QWidget):
             self._settings_btn.set_badge(True)
         bottom_layout.addWidget(self._settings_btn)
 
-        bottom_layout.addWidget(hint_label)
+        bottom_layout.addWidget(self._submit_hint_label)
         bottom_layout.addStretch()
 
         _mini_cb_style = (
@@ -592,6 +621,8 @@ class FeedbackContentWidget(QWidget):
         self.chinese_mode_cb.setChecked(user_prefs.get(KEY_CHINESE_DEFAULT, True))
         self.chinese_mode_cb.setStyleSheet(_mini_cb_style)
         bottom_layout.addWidget(self.chinese_mode_cb)
+
+        self._apply_submit_shortcut(user_prefs.get(KEY_SUBMIT_SHORTCUT, SUBMIT_SHORTCUT_CTRL_ENTER))
 
         self.end_session_btn = QPushButton("结束会话")
         self.end_session_btn.setMinimumWidth(120)
@@ -752,6 +783,7 @@ class FeedbackContentWidget(QWidget):
             prefs = load_settings()
             self.chinese_mode_cb.setChecked(prefs.get(KEY_CHINESE_DEFAULT, True))
             self.reread_rules_cb.setChecked(prefs.get(KEY_REREAD_RULES_DEFAULT, False))
+            self._apply_submit_shortcut(prefs.get(KEY_SUBMIT_SHORTCUT, SUBMIT_SHORTCUT_CTRL_ENTER))
 
     def focus_feedback_input(self):
         self.feedback_text.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
@@ -820,14 +852,59 @@ class FeedbackContentWidget(QWidget):
         self.feedback_submitted.emit(result)
 
     def _confirm_end_session(self):
-        answer = QMessageBox.question(
-            self,
-            "确认结束会话",
-            "确认结束当前会话？\n\n确认后会自动回复：结束会话【结束会话】",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        dialog = QDialog(self)
+        dialog.setWindowTitle("确认结束会话")
+        dialog.setModal(True)
+        dialog.setFixedWidth(420)
+        dialog.setStyleSheet(
+            f"QDialog {{ background-color: {DARK_BG}; color: {TEXT_PRIMARY}; }}"
+            f"QLabel {{ color: {TEXT_PRIMARY}; }}"
         )
-        if answer != QMessageBox.StandardButton.Yes:
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("确认结束当前会话？")
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        layout.addWidget(title)
+
+        desc = QLabel("确认后会自动回复：结束会话【结束会话】")
+        desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        desc.setStyleSheet(f"font-size: 13px; color: {TEXT_SECONDARY};")
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch()
+
+        cancel_btn = QPushButton("继续编辑")
+        cancel_btn.setMinimumWidth(120)
+        cancel_btn.setMinimumHeight(38)
+        cancel_btn.setStyleSheet(
+            f"QPushButton {{ background: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: bold; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT_BLUE}; background: #333350; }}"
+        )
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_row.addWidget(cancel_btn)
+
+        confirm_btn = QPushButton("确认结束")
+        confirm_btn.setMinimumWidth(120)
+        confirm_btn.setMinimumHeight(38)
+        confirm_btn.setStyleSheet(
+            f"QPushButton {{ background: {BTN_CANCEL_BG}; color: white; border: none; "
+            f"border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: {BTN_CANCEL_HOVER}; }}"
+        )
+        confirm_btn.clicked.connect(dialog.accept)
+        btn_row.addWidget(confirm_btn)
+        layout.addLayout(btn_row)
+
+        cancel_btn.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         self._stop_countdown()

@@ -9,7 +9,7 @@ import urllib.error
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QCheckBox, QGroupBox, QFrame, QTextEdit, QSpinBox, QLineEdit,
+    QCheckBox, QComboBox, QGroupBox, QFrame, QTextEdit, QSpinBox, QLineEdit,
     QListWidget, QListWidgetItem, QScrollArea, QWidget,
 )
 from PySide6.QtCore import Qt, QSettings, Signal, QObject
@@ -106,6 +106,10 @@ KEY_AUTO_REPLY_MESSAGE = "auto_reply_message"
 KEY_HAS_UPDATE = "has_update"
 KEY_QUICK_REPLIES = "quick_replies"
 KEY_QR_AUTO_SUBMIT = "quick_reply_auto_submit"
+KEY_SUBMIT_SHORTCUT = "submit_shortcut"
+
+SUBMIT_SHORTCUT_ENTER = "enter"
+SUBMIT_SHORTCUT_CTRL_ENTER = "ctrl_enter"
 
 DEFAULT_TIMEOUT_MINUTES = 720  # 12 hours
 DEFAULT_AUTO_REPLY_SECONDS = 3000
@@ -122,6 +126,7 @@ def load_settings() -> dict:
         KEY_CUSTOM_SUFFIX: s.value(KEY_CUSTOM_SUFFIX, "", type=str),
         KEY_TIMEOUT_MINUTES: s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int),
         KEY_AUTO_REPLY_MESSAGE: get_auto_reply_message(),
+        KEY_SUBMIT_SHORTCUT: s.value(KEY_SUBMIT_SHORTCUT, SUBMIT_SHORTCUT_CTRL_ENTER, type=str),
     }
 
 
@@ -385,6 +390,28 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.cb_reread)
         layout.addWidget(self.cb_update)
 
+        send_shortcut_row = QHBoxLayout()
+        send_shortcut_row.setContentsMargins(_INDENT, 0, 0, 0)
+        send_shortcut_row.addWidget(QLabel("发送快捷键："))
+        _combo_style = (
+            f"QComboBox {{ background-color: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"border: 1px solid {DARK_BORDER}; border-radius: 4px; padding: 4px 8px; font-size: 13px; }}"
+            f"QComboBox::drop-down {{ border: none; width: 22px; }}"
+            f"QComboBox QAbstractItemView {{ background-color: {DARK_SURFACE}; color: {TEXT_PRIMARY}; "
+            f"selection-background-color: rgba(74,158,255,0.2); border: 1px solid {DARK_BORDER}; }}"
+        )
+        self.submit_shortcut_combo = QComboBox()
+        self.submit_shortcut_combo.setStyleSheet(_combo_style)
+        self.submit_shortcut_combo.addItem("按 Ctrl+Enter 发送（默认）", SUBMIT_SHORTCUT_CTRL_ENTER)
+        self.submit_shortcut_combo.addItem("按 Enter 发送", SUBMIT_SHORTCUT_ENTER)
+        send_shortcut_row.addWidget(self.submit_shortcut_combo)
+        send_shortcut_row.addStretch()
+        layout.addLayout(send_shortcut_row)
+
+        send_shortcut_hint = QLabel("选择 Enter 发送时，可用 Shift+Enter 换行")
+        send_shortcut_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
+        layout.addWidget(send_shortcut_hint)
+
         # Timeout setting
         lbl_timeout = QLabel("倒计时")
         lbl_timeout.setStyleSheet(_section_title_style)
@@ -628,6 +655,10 @@ class SettingsDialog(QDialog):
         self.cb_reread.setChecked(data[KEY_REREAD_RULES_DEFAULT])
         self.cb_update.setChecked(data[KEY_CHECK_UPDATE])
         self.suffix_edit.setPlainText(data[KEY_CUSTOM_SUFFIX])
+        shortcut_mode = data.get(KEY_SUBMIT_SHORTCUT, SUBMIT_SHORTCUT_CTRL_ENTER)
+        shortcut_index = self.submit_shortcut_combo.findData(shortcut_mode)
+        if shortcut_index >= 0:
+            self.submit_shortcut_combo.setCurrentIndex(shortcut_index)
         total_mins = max(10, data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES))
         self.timeout_hours_spin.setValue(total_mins // 60)
         self.timeout_mins_spin.setValue(total_mins % 60)
@@ -654,6 +685,7 @@ class SettingsDialog(QDialog):
             KEY_CUSTOM_SUFFIX: self.suffix_edit.toPlainText().strip(),
             KEY_TIMEOUT_MINUTES: total_mins,
             KEY_AUTO_REPLY_MESSAGE: self.auto_reply_edit.toPlainText().strip() or DEFAULT_AUTO_REPLY_MESSAGE,
+            KEY_SUBMIT_SHORTCUT: self.submit_shortcut_combo.currentData(),
         })
         # Quick replies
         save_quick_replies(self._quick_replies)
