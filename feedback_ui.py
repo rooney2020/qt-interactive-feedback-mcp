@@ -14,7 +14,7 @@ from typing import TypedDict, Optional, List
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QCheckBox, QTextEdit, QGroupBox,
-    QFrame, QScrollArea, QFileDialog, QSizePolicy, QMenu,
+    QFrame, QScrollArea, QFileDialog, QSizePolicy, QMenu, QMessageBox,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSettings, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage, QTextCursor
@@ -593,6 +593,17 @@ class FeedbackContentWidget(QWidget):
         self.chinese_mode_cb.setStyleSheet(_mini_cb_style)
         bottom_layout.addWidget(self.chinese_mode_cb)
 
+        self.end_session_btn = QPushButton("结束会话")
+        self.end_session_btn.setMinimumWidth(120)
+        self.end_session_btn.setMinimumHeight(36)
+        self.end_session_btn.setStyleSheet(
+            f"QPushButton {{ background: {BTN_CANCEL_BG}; color: white; "
+            f"border: none; border-radius: 6px; padding: 8px 24px; font-size: 14px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: {BTN_CANCEL_HOVER}; }}"
+        )
+        self.end_session_btn.clicked.connect(self._confirm_end_session)
+        bottom_layout.addWidget(self.end_session_btn)
+
         self.submit_btn = QPushButton("\u2705 \u63d0\u4ea4\u53cd\u9988")
         self.submit_btn.setMinimumWidth(120)
         self.submit_btn.setMinimumHeight(36)
@@ -806,6 +817,25 @@ class FeedbackContentWidget(QWidget):
             mentioned_entities=mentioned,
         )
         self._stop_countdown()
+        self.feedback_submitted.emit(result)
+
+    def _confirm_end_session(self):
+        answer = QMessageBox.question(
+            self,
+            "确认结束会话",
+            "确认结束当前会话？\n\n确认后会自动回复：结束会话【结束会话】",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._stop_countdown()
+        result = FeedbackResult(
+            interactive_feedback="结束会话【结束会话】",
+            images=[],
+            mentioned_entities=[],
+        )
         self.feedback_submitted.emit(result)
 
     def _update_countdown_text(self):
