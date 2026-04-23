@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QFileDialog, QSizePolicy, QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QSettings, QByteArray, QBuffer, QIODevice
-from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage
+from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap, QImage, QTextCursor
 
 from settings_dialog import (
     SettingsDialog, load_settings, load_quick_replies, is_quick_reply_auto_submit,
@@ -742,6 +742,12 @@ class FeedbackContentWidget(QWidget):
             self.chinese_mode_cb.setChecked(prefs.get(KEY_CHINESE_DEFAULT, True))
             self.reread_rules_cb.setChecked(prefs.get(KEY_REREAD_RULES_DEFAULT, False))
 
+    def focus_feedback_input(self):
+        self.feedback_text.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        cursor = self.feedback_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.feedback_text.setTextCursor(cursor)
+
     def _has_content(self) -> bool:
         if self.feedback_text.toPlainText().strip():
             return True
@@ -909,9 +915,16 @@ class FeedbackUI(QMainWindow):
         except Exception:
             pass
 
+    def _focus_feedback_input(self):
+        self.activateWindow()
+        self.raise_()
+        self.content.focus_feedback_input()
+
     def run(self) -> FeedbackResult:
         self.show()
+        QTimer.singleShot(0, self._focus_feedback_input)
         QTimer.singleShot(300, self._activate_input_method)
+        QTimer.singleShot(350, self._focus_feedback_input)
         QApplication.instance().exec()
 
         if not self.feedback_result:

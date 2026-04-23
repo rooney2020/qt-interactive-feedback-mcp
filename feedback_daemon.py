@@ -323,6 +323,8 @@ class DaemonWindow(QMainWindow):
                 self.raise_()
 
             self._activate_input_method()
+            QTimer.singleShot(0, tab.focus_feedback_input)
+            QTimer.singleShot(150, tab.focus_feedback_input)
         except Exception as e:
             _log(f"ERROR in _add_tab for {session_id}: {e}")
             response_dict[session_id] = {"interactive_feedback": f"[UI error: {e}]", "images": []}
