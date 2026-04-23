@@ -167,15 +167,30 @@ def get_soft_timeout() -> int:
     """Return SOFT_TIMEOUT in seconds from saved settings. Called by server.py.
     Buffer = 5% of total, capped between 10s and 200s."""
     s = QSettings(SETTINGS_ORG, SETTINGS_APP)
-    mins = s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int)
-    total_sec = mins * 60
+    mins = max(10, s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int))
+    total_sec = _mcp_timeout_minutes_from_countdown(mins) * 60
     buffer = max(10, min(200, int(total_sec * 0.05)))
     return total_sec - buffer
 
 
+def _timeout_grace_minutes(countdown_minutes: int) -> int:
+    countdown_minutes = max(10, countdown_minutes)
+    return max(1, min(10, (countdown_minutes + 59) // 60))
+
+
+def _mcp_timeout_minutes_from_countdown(countdown_minutes: int) -> int:
+    countdown_minutes = max(10, countdown_minutes)
+    return countdown_minutes + _timeout_grace_minutes(countdown_minutes)
+
+
+def _auto_reply_seconds_from_minutes(timeout_minutes: int) -> int:
+    return max(600, timeout_minutes * 60)
+
+
 def get_auto_reply_seconds() -> int:
     s = QSettings(SETTINGS_ORG, SETTINGS_APP)
-    return s.value("auto_reply_seconds", DEFAULT_AUTO_REPLY_SECONDS, type=int)
+    mins = max(10, s.value(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES, type=int))
+    return _auto_reply_seconds_from_minutes(mins)
 
 
 def get_auto_reply_message() -> str:
@@ -197,7 +212,7 @@ def _find_mcp_json_paths() -> list:
 
 def sync_mcp_json_timeout(timeout_minutes: int) -> list:
     """Update timeout in all found mcp.json files. Returns list of (path, success, msg)."""
-    timeout_sec = timeout_minutes * 60
+    timeout_sec = _mcp_timeout_minutes_from_countdown(timeout_minutes) * 60
     results = []
     for path in _find_mcp_json_paths():
         try:
@@ -371,7 +386,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.cb_update)
 
         # Timeout setting
-        lbl_timeout = QLabel("超时时间")
+        lbl_timeout = QLabel("倒计时")
         lbl_timeout.setStyleSheet(_section_title_style)
         layout.addWidget(lbl_timeout)
 
@@ -382,9 +397,9 @@ class SettingsDialog(QDialog):
         )
         timeout_row = QHBoxLayout()
         timeout_row.setContentsMargins(_INDENT, 0, 0, 0)
-        timeout_row.addWidget(QLabel("单次调用最大等待："))
+        timeout_row.addWidget(QLabel("无响应自动回复："))
         self.timeout_hours_spin = QSpinBox()
-        self.timeout_hours_spin.setRange(0, 48)
+        self.timeout_hours_spin.setRange(0, 9999)
         self.timeout_hours_spin.setSuffix(" 小时")
         self.timeout_hours_spin.setStyleSheet(_spin_style)
         timeout_row.addWidget(self.timeout_hours_spin)
@@ -397,7 +412,7 @@ class SettingsDialog(QDialog):
         timeout_row.addStretch()
         layout.addLayout(timeout_row)
 
-        timeout_hint = QLabel("保存后自动同步 mcp.json，修改后需重启 Cursor 生效")
+        timeout_hint = QLabel("这里设置的是倒计时；保存后会自动把 mcp.json 的 timeout 调大 1 到 10 分钟，修改后需重启 Cursor 生效")
         timeout_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; margin-left: {_INDENT}px;")
         layout.addWidget(timeout_hint)
 
@@ -613,7 +628,7 @@ class SettingsDialog(QDialog):
         self.cb_reread.setChecked(data[KEY_REREAD_RULES_DEFAULT])
         self.cb_update.setChecked(data[KEY_CHECK_UPDATE])
         self.suffix_edit.setPlainText(data[KEY_CUSTOM_SUFFIX])
-        total_mins = data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES)
+        total_mins = max(10, data.get(KEY_TIMEOUT_MINUTES, DEFAULT_TIMEOUT_MINUTES))
         self.timeout_hours_spin.setValue(total_mins // 60)
         self.timeout_mins_spin.setValue(total_mins % 60)
         self.auto_reply_edit.setPlainText(data[KEY_AUTO_REPLY_MESSAGE])
@@ -630,8 +645,8 @@ class SettingsDialog(QDialog):
 
     def _save_and_close(self):
         total_mins = self.timeout_hours_spin.value() * 60 + self.timeout_mins_spin.value()
-        if total_mins < 1:
-            total_mins = 1
+        if total_mins < 10:
+            total_mins = 10
         save_settings({
             KEY_CHINESE_DEFAULT: self.cb_chinese.isChecked(),
             KEY_REREAD_RULES_DEFAULT: self.cb_reread.isChecked(),
@@ -644,6 +659,7 @@ class SettingsDialog(QDialog):
         save_quick_replies(self._quick_replies)
         s_qr = QSettings(SETTINGS_ORG, SETTINGS_APP)
         s_qr.setValue(KEY_QR_AUTO_SUBMIT, self._qr_auto_submit.isChecked())
+        s_qr.setValue("auto_reply_seconds", _auto_reply_seconds_from_minutes(total_mins))
 
         # Feishu credentials
         s = QSettings("InteractiveFeedbackMCP", "Settings")
