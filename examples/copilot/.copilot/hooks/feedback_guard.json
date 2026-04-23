@@ -1,0 +1,19 @@
+{
+	"version": 1,
+	"hooks": {
+		"sessionEnd": [
+			{
+				"type": "command",
+				"bash": "bash /home/tsdl/.copilot/hooks/check_feedback_gate.sh",
+				"timeout": 10
+			}
+		],
+		"Stop": [
+			{
+				"type": "command",
+				"bash": "bash /home/tsdl/.copilot/hooks/check_feedback_gate.sh",
+				"timeout": 10
+			}
+		]
+	}
+}

@@ -1,0 +1,161 @@
+---
+description: 每次对话自动启用反馈交互机制，始终优先使用 interactive_feedback，连续失败3次后才降级到 AskQuestion
+alwaysApply: true
+---
+
+# 反馈交互规则
+
+## 核心原则
+
+**每次对话都必须通过交互工具与用户保持持续沟通，禁止单方面结束对话。**
+
+## 工具选择策略
+
+**`interactive_feedback` 始终优先**，不区分中间过程还是最终确认。只有连续失败 3 次后才降级到 `AskQuestion`。
+
+| 场景 | 使用工具 | 说明 |
+|------|----------|------|
+| 所有交互场景 | **interactive_feedback** | 始终优先使用 |
+| interactive_feedback 连续失败 3 次后 | **AskQuestion** | 降级备选 |
+
+### 关键规则
+
+1. **所有交互（中间确认、方案选择、最终确认）都优先使用 `interactive_feedback`**
+2. 只有 `interactive_feedback` **连续失败 3 次**（非心跳的真正错误）后，才降级到 `AskQuestion`
+3. 降级后每次交互仍应先尝试 `interactive_feedback`，成功则恢复优先使用
+4. 用户说"等一下"/"稍后"/"我先离开"时，**不要**调用任何交互工具（避免超时浪费请求）
+
+## 心跳保活机制
+
+### 工作原理
+
+`interactive_feedback` MCP 工具内置了 **progress notification 心跳机制**：
+- Qt 反馈窗口在等待用户输入时**不会被关闭**
+- 工具在内部通过 MCP progress notification 保持连接，**不会频繁返回心跳消息**
+- 工具会持续等待直到用户提交反馈或 timeout 到期（默认 12 小时）
+- 只有在完整 timeout 到期后，才会返回心跳消息 `[心跳]`
+
+### 心跳处理规则
+
+1. **正常情况无需处理心跳**：工具会在内部保持等待，大多数情况下直接返回用户反馈
+2. **识别心跳**：仅当 timeout 完全到期后，返回内容包含 `[心跳]` 关键词
+3. **静默重连**：收到心跳后，**不输出任何文字**，直接再次调用 `interactive_feedback`（使用相同的 summary 和 project_directory 参数）
+4. **心跳不计入失败次数**：心跳是正常行为，不算作失败
+
+### 心跳流程
+
+```
+interactive_feedback(summary) → [内部 progress notification 保活] → 用户提交 → 返回反馈
+                                                                  → timeout 到期 → [心跳] → 静默重新调用
+```
+
+### 超时重连机制
+
+当 `interactive_feedback` 工具因 Cursor 侧超时或连接断开而失败时：
+1. **立即重新调用** `interactive_feedback`，使用相同的参数
+2. **不输出任何文字说明**，直接静默重连
+3. 超时不计入连续失败次数
+4. 如果反复超时（连续 3 次），降级到 `AskQuestion` 并提供"重试 interactive_feedback"选项
+
+### Cursor MCP 工具注册表失效处理
+
+长时间运行的 agent 会话中，Cursor 可能出现 MCP 工具注册表暂时失效，错误特征：`Tool not found` 或 `Connection closed`。
+
+1. **识别**：错误信息包含 `Tool not found` 或 `Connection closed`
+2. **不计入失败次数**：此类错误是 Cursor 暂时性问题
+3. **重试策略**：首次 sleep 10s 后重试；之后每次 sleep 60s；最多重试 10 次
+4. **全部失败**：降级到 `AskQuestion`，说明 Cursor MCP 连接异常及重试次数
+5. **重试成功后重置所有计数**
+
+## tab_id 和 tab_title 参数规则
+
+调用 `interactive_feedback` 时，**必须传入 `tab_id` 和 `tab_title` 参数**。
+
+### tab_id（会话唯一标识）
+
+- **首次调用时必须随机生成一个全新的 UUID**（使用 UUID v4 随机生成，**严禁使用文档中的示例 UUID**）
+- **同一会话中所有调用必须使用相同的 `tab_id`**
+- `tab_id` 用于去重：同一 `tab_id` 的新请求会自动替换旧 tab
+- **不同会话必须使用不同的 `tab_id`**
+- **禁止**直接复制文档示例中的 UUID，必须每次随机生成
+
+### tab_title（显示标题）
+
+- `tab_title` 应简短（≤15字），描述当前会话的核心任务
+- 根据对话上下文推断任务名称，例如：`"日报填写"`、`"代码审查"`、`"Bug修复"`、`"功能开发"`
+- 同一会话中所有调用应使用**相同的** `tab_title`
+- 如果无法确定任务名称，使用 `"反馈"` 作为默认值
+- **禁止**使用 PID、随机 ID 或无意义的编号作为标题
+
+### 示例
+
+```json
+// 注意：下方 tab_id 仅为格式示例，实际使用时必须随机生成新的 UUID，严禁直接复制！
+{"message": "...", "tab_id": "<随机生成的UUID>", "tab_title": "日报填写", "predefined_options": [...]}
+{"message": "...", "tab_id": "<同一会话使用相同UUID>", "tab_title": "日报填写", "predefined_options": [...]}
+```
+
+## 必须调用交互工具的场景
+
+- 任务完成（无论成功或失败）→ `interactive_feedback`
+- 给出多个方案供用户选择 → `interactive_feedback`
+- 需要用户澄清或提问 → `interactive_feedback`
+- 判断无需操作时，说明原因并确认 → `interactive_feedback`
+- 遇到错误需要用户决策 → `interactive_feedback`
+- 中间过程确认/选择 → `interactive_feedback`
+
+## 工作流程
+
+### 正常流程
+
+1. 执行用户请求的任务
+2. 需要任何交互时 → 调用 `interactive_feedback`
+3. 工具在内部通过 progress notification 保活，通常直接返回用户反馈
+4. 若收到 `[心跳]`（仅在 timeout 到期时）→ 静默重新调用 `interactive_feedback`
+5. 收到实际反馈 → 根据内容决定下一步：
+   - 用户说"完成"/"可以了"/"结束" → 结束对话
+   - 用户提出新需求 → 继续执行，完成后再调用 `interactive_feedback`
+
+### 降级与恢复流程
+
+**interactive_feedback 连续失败 3 次（非心跳错误）→ 降级到 AskQuestion：**
+1. 记录连续失败次数（心跳不算失败）
+2. 达到 3 次后，使用 `AskQuestion` 完成交互
+3. 在选项中提供「尝试重新连接 interactive_feedback」选项
+4. 如果用户选择重连或下次交互时，先尝试 `interactive_feedback`，成功则重置失败计数
+
+**AskQuestion 异常结束时 → 切换到 interactive_feedback：**
+1. 当 `AskQuestion` 被跳过或异常返回后，立即尝试 `interactive_feedback`
+2. 循环直到成功建立交互或用户手动发送消息
+
+## 选项标识规则（必须遵守）
+
+无论使用 `interactive_feedback` 还是 `AskQuestion`，给出预定义选项时**必须遵守以下规则**：
+
+1. **标识结束选项**：如果某个选项会导致会话结束，必须在选项文本末尾标注 `【结束会话】`
+   - 示例：`"先这样，结束会话 【结束会话】"`、`"完成，不需要其他操作 【结束会话】"`
+2. **提供工具切换选项**：在选项列表中，**必须提供一个切换到另一种交互工具的选项**
+   - 使用 `interactive_feedback` 时，提供选项：`"切换到 AskQuestion"`
+   - 使用 `AskQuestion` 时，提供选项：`"切换到 Feedback"`
+   - 此选项用于用户主动切换交互方式，不受失败次数限制
+3. **不标注的选项默认不会结束会话**：只有明确标注了 `【结束会话】` 的选项才会结束
+
+## 禁止行为
+
+- **禁止**在会话中直接结束对话或输出最终结果后停止
+- **禁止**在交互工具可用时直接在对话中提问等待回复
+- **禁止**输出结果后不调用任何交互工具
+- **禁止**擅自判断任务已完成而结束反馈循环
+- **禁止**擅自开启新 Agent 会话
+- **禁止**用户明确表示暂时离开时调用 interactive_feedback（会导致超时浪费请求）
+- **禁止**收到心跳后输出文字或降级到 AskQuestion
+- **禁止**给出选项时不标识哪个选项会结束会话
+- **禁止**给出选项时不提供工具切换选项
+
+## 重要提醒
+
+- 必须实际调用工具，不能只是文字描述要调用
+- 循环直到用户明确说"完成"/"可以了"/"结束"
+- **所有交互优先 `interactive_feedback`，连续失败 3 次后才降级**
+- 收到 `[心跳]` 消息后立即静默重新调用，不输出任何文字
+- **给出选项时必须标识结束选项和提供工具切换选项**
